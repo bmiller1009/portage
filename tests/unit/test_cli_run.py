@@ -83,8 +83,8 @@ def test_run_succeeds_and_resolves_dataset_config():
     assert fake.submitted_request is not None
     resolved = fake.submitted_request.resolved
     assert resolved.dataset_config == {
-        "portable.dataset.wordcount.raw.uri": "s3a://portage-phase0/wordcount/input.txt",
-        "portable.dataset.wordcount.counts.uri": "s3a://portage-phase0/wordcount/output",
+        "spark.portable.dataset.wordcount.raw.uri": "s3a://portage-phase0/wordcount/input.txt",
+        "spark.portable.dataset.wordcount.counts.uri": "s3a://portage-phase0/wordcount/output",
     }
     assert resolved.storage_config["spark.hadoop.fs.s3a.endpoint"] == "http://minio.local:9000"
 

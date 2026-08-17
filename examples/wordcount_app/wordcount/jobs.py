@@ -10,8 +10,8 @@ from pyspark.sql.functions import col, explode, lower, split
 def count() -> None:
     spark = SparkSession.builder.appName("portage-wordcount").getOrCreate()
 
-    input_uri = spark.conf.get("portable.dataset.wordcount.raw.uri")
-    output_uri = spark.conf.get("portable.dataset.wordcount.counts.uri")
+    input_uri = spark.conf.get("spark.portable.dataset.wordcount.raw.uri")
+    output_uri = spark.conf.get("spark.portable.dataset.wordcount.counts.uri")
 
     text = spark.read.text(input_uri)
     words = text.select(explode(split(lower(col("value")), r"\s+")).alias("word"))

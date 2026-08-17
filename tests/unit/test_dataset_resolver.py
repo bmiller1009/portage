@@ -27,8 +27,8 @@ def test_resolves_portable_dataset_config_for_environment():
     config = resolve_dataset_config(workload, datasets, "k8s_remote")
 
     assert config == {
-        "portable.dataset.wordcount.raw.uri": "s3a://portage-phase0/wordcount/input.txt",
-        "portable.dataset.wordcount.counts.uri": "s3a://portage-phase0/wordcount/output",
+        "spark.portable.dataset.wordcount.raw.uri": "s3a://portage-phase0/wordcount/input.txt",
+        "spark.portable.dataset.wordcount.counts.uri": "s3a://portage-phase0/wordcount/output",
     }
 
 

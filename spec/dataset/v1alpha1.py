@@ -44,8 +44,17 @@ def resolve_dataset_config(
     datasets: dict[str, Dataset],
     environment: str,
 ) -> dict[str, str]:
-    """Produce the portable.dataset.<name>.uri Spark configuration entries
-    for every input/output dataset a workload references, per ADR 0006."""
+    """Produce the spark.portable.dataset.<name>.uri Spark configuration
+    entries for every input/output dataset a workload references, per
+    ADR 0006.
+
+    The key is prefixed with "spark." — confirmed necessary by running this
+    live during Phase 0: Spark 4.2's RuntimeConfig silently drops any
+    --conf key that isn't spark.*-namespaced ("Ignoring non-Spark config
+    property"), so a bare "portable.dataset.*.uri" key is never visible to
+    spark.conf.get() at all, even though it's accepted into sparkConf by
+    the Kubernetes Operator and Databricks Jobs API without complaint.
+    """
     config: dict[str, str] = {}
     refs = list(workload.datasets.inputs.values()) + list(workload.datasets.outputs.values())
     for ref in refs:
@@ -57,5 +66,5 @@ def resolve_dataset_config(
             raise DatasetResolutionError(
                 f"dataset '{ref.dataset}' has no binding for environment '{environment}'"
             )
-        config[f"portable.dataset.{ref.dataset}.uri"] = binding.uri
+        config[f"spark.portable.dataset.{ref.dataset}.uri"] = binding.uri
     return config

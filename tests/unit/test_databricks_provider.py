@@ -61,8 +61,8 @@ def resolved_run() -> RunRequest:
     resolved = ResolvedWorkload(
         workload=workload,
         dataset_config={
-            "portable.dataset.wordcount.raw.uri": "s3a://portage-phase0/wordcount/input.txt",
-            "portable.dataset.wordcount.counts.uri": "s3a://portage-phase0/wordcount/output",
+            "spark.portable.dataset.wordcount.raw.uri": "s3a://portage-phase0/wordcount/input.txt",
+            "spark.portable.dataset.wordcount.counts.uri": "s3a://portage-phase0/wordcount/output",
         },
         environment_name="databricks-mock",
     )
@@ -80,7 +80,7 @@ def test_build_run_submission_splits_entry_point_into_package_and_entry(profile,
     assert task.new_cluster is not None
     assert task.new_cluster.node_type_id == "i3.xlarge"
     assert task.new_cluster.spark_conf is not None
-    assert task.new_cluster.spark_conf["portable.dataset.wordcount.raw.uri"] == (
+    assert task.new_cluster.spark_conf["spark.portable.dataset.wordcount.raw.uri"] == (
         "s3a://portage-phase0/wordcount/input.txt"
     )
     assert task.libraries is not None

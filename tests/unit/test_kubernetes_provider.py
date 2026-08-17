@@ -46,8 +46,8 @@ def resolved_run() -> RunRequest:
     resolved = ResolvedWorkload(
         workload=workload,
         dataset_config={
-            "portable.dataset.wordcount.raw.uri": "s3a://portage-phase0/wordcount/input.txt",
-            "portable.dataset.wordcount.counts.uri": "s3a://portage-phase0/wordcount/output",
+            "spark.portable.dataset.wordcount.raw.uri": "s3a://portage-phase0/wordcount/input.txt",
+            "spark.portable.dataset.wordcount.counts.uri": "s3a://portage-phase0/wordcount/output",
         },
         environment_name="k8s-remote",
     )
@@ -67,7 +67,7 @@ def test_build_spark_application_shape(profile, resolved_run):
     assert spec["sparkConf"]["spark.driver.memory"] == "2g"
     assert spec["sparkConf"]["spark.executor.memory"] == "2g"
     assert (
-        spec["sparkConf"]["portable.dataset.wordcount.raw.uri"]
+        spec["sparkConf"]["spark.portable.dataset.wordcount.raw.uri"]
         == "s3a://portage-phase0/wordcount/input.txt"
     )
 
@@ -104,6 +104,47 @@ def test_status_maps_native_state_to_canonical_run_state(
 
     assert status.state == expected
     assert status.provider_native_status == native_state
+
+
+@pytest.mark.parametrize(
+    "last_real_state,expected",
+    [("Succeeded", RunState.SUCCEEDED), ("Failed", RunState.FAILED)],
+)
+def test_status_resolves_resource_released_via_history(profile, last_real_state, expected):
+    """ResourceReleased is a post-terminal cleanup marker with no outcome of
+    its own — confirmed live during Phase 0 (a real job that failed still
+    settled on currentStateSummary=ResourceReleased). status() must look
+    back through history rather than report UNKNOWN forever."""
+    fake_api = FakeCustomObjectsApi()
+    fake_api.status_to_return = {
+        "currentState": {"currentStateSummary": "ResourceReleased"},
+        "stateTransitionHistory": {
+            "0": {"currentStateSummary": "Submitted"},
+            "1": {"currentStateSummary": "RunningHealthy"},
+            "2": {"currentStateSummary": last_real_state},
+            "3": {"currentStateSummary": "ResourceReleased"},
+        },
+    }
+    provider = KubernetesExecutionProvider(profile, api_client=fake_api)
+
+    status = asyncio.run(provider.status("wordcount-abc123"))
+
+    assert status.state == expected
+    assert status.provider_native_status == last_real_state
+
+
+def test_status_falls_back_to_unknown_when_history_has_no_terminal_outcome(profile):
+    fake_api = FakeCustomObjectsApi()
+    fake_api.status_to_return = {
+        "currentState": {"currentStateSummary": "ResourceReleased"},
+        "stateTransitionHistory": {"0": {"currentStateSummary": "Submitted"}},
+    }
+    provider = KubernetesExecutionProvider(profile, api_client=fake_api)
+
+    status = asyncio.run(provider.status("wordcount-abc123"))
+
+    assert status.state == RunState.UNKNOWN
+    assert status.provider_native_status == "ResourceReleased"
 
 
 def test_cancel_deletes_custom_object(profile):

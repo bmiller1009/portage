@@ -23,7 +23,7 @@ from control_plane.execution_provider import (
     RunRequest,
     ValidationResult,
 )
-from control_plane.run_state import RunState
+from control_plane.run_state import TERMINAL_STATES, RunState
 
 SPARK_APPLICATION_GROUP = "spark.apache.org"
 SPARK_APPLICATION_VERSION = "v1"
@@ -55,8 +55,14 @@ _STATE_MAP: dict[str, RunState] = {
     "SchedulingFailure": RunState.FAILED,
     "TerminatedWithoutReleaseResources": RunState.FAILED,
     "ScheduledToRestart": RunState.SUBMITTING,
-    "ResourceReleased": RunState.UNKNOWN,
 }
+
+# "ResourceReleased" is a post-terminal cleanup marker (confirmed live: it's
+# what currentStateSummary settles on after Succeeded/Failed once the
+# operator releases driver/executor resources) — it carries no outcome of
+# its own, so status() looks back through stateTransitionHistory for the
+# terminal state it followed rather than reporting RunState.UNKNOWN forever.
+_NON_INFORMATIVE_STATES = {"ResourceReleased"}
 
 _SUPPORTED_SPARK_VERSIONS = {"4.1", "4.2"}
 
@@ -86,6 +92,22 @@ class KubernetesProfile:
     image: str
     kubeconfig_path: str | None = None
     context: str | None = None
+
+
+def _last_terminal_outcome(state_transition_history: dict) -> str | None:
+    """Walk a SparkApplication's stateTransitionHistory (numeric-string keys,
+    chronological) backwards for the most recent entry that maps to an
+    actually-terminal RunState (SUCCEEDED/FAILED/CANCELED/LOST) — not just
+    any known state, since e.g. "Submitted" is known but not terminal."""
+    try:
+        ordered_keys = sorted(state_transition_history, key=int, reverse=True)
+    except (TypeError, ValueError):
+        return None
+    for key in ordered_keys:
+        summary = state_transition_history[key].get("currentStateSummary")
+        if summary and _STATE_MAP.get(summary) in TERMINAL_STATES:
+            return summary
+    return None
 
 
 def _to_spark_memory(k8s_quantity: str) -> str:
@@ -186,9 +208,16 @@ class KubernetesExecutionProvider:
             plural=SPARK_APPLICATION_PLURAL,
             name=provider_run_id,
         )
-        native_state = obj.get("status", {}).get("currentState", {}).get("currentStateSummary")
+        status_obj = obj.get("status") or {}
+        native_state = status_obj.get("currentState", {}).get("currentStateSummary")
         if native_state is None:
             return ProviderStatus(state=RunState.SUBMITTING, provider_native_status="Unreported")
+
+        if native_state in _NON_INFORMATIVE_STATES:
+            resolved = _last_terminal_outcome(status_obj.get("stateTransitionHistory", {}))
+            if resolved is not None:
+                native_state = resolved
+
         return ProviderStatus(
             state=_STATE_MAP.get(native_state, RunState.UNKNOWN),
             provider_native_status=native_state,
