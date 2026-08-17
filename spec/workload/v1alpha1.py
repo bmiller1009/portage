@@ -74,3 +74,9 @@ def parse_workload(path: str | Path) -> SparkWorkload:
     with open(path) as f:
         raw = yaml.safe_load(f)
     return SparkWorkload.model_validate(raw)
+
+
+def json_schema() -> dict:
+    """Export the v1alpha1 JSON Schema, per the spec's own recommendation
+    that the portable workload schema be publicly documented (§43)."""
+    return SparkWorkload.model_json_schema()

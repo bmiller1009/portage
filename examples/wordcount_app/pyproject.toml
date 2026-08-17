@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wordcount"
+version = "0.1.0"
+description = "Portage Phase 0 example workload — a real PySpark word-count ETL, used to prove the portable workload contract."
+requires-python = ">=3.10"
+
+# pyspark itself is provided by the Spark base image at runtime (spec §17 —
+# application artifact vs. execution runtime image are separate concerns);
+# it's listed here only so the wheel is locally testable/importable.
+dependencies = ["pyspark==4.2.0"]
+
+# Registers "count" as a console-script entry point so the same wheel is
+# invocable by both providers: the Kubernetes provider's generic launcher
+# imports wordcount.jobs and calls count() directly (see
+# providers/execution/kubernetes/provider.py); the Databricks provider's
+# python_wheel_task addresses this same entry point by name (see
+# providers/execution/databricks/provider.py's _split_entry_point).
+[project.scripts]
+count = "wordcount.jobs:count"
+
+[tool.setuptools.packages.find]
+include = ["wordcount*"]

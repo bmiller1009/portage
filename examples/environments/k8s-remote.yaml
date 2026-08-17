@@ -1,0 +1,13 @@
+apiVersion: runtime/v1alpha1
+kind: Environment
+
+metadata:
+  name: k8s-remote
+
+execution:
+  provider: kubernetes
+  profile: phase0-remote
+
+data:
+  provider: s3
+  profile: phase0-minio

@@ -4,4 +4,4 @@ Translates a `ResolvedWorkload` into a Databricks Jobs API 2.2 one-time submissi
 
 Initial conformance target: Databricks Runtime 19 (Spark 4.2 compatibility class); a Databricks Runtime 18 LTS / Spark 4.1 profile follows for customers prioritizing long support windows (§46).
 
-Not yet implemented — Phase 0 milestone (`Databricks execution provider prototype`).
+`provider.py` implements `DatabricksExecutionProvider` — a translation-layer prototype only. No live Databricks workspace was available during Phase 0, so this is unit-tested against a hand-written fake `WorkspaceClient` (`tests/unit/test_databricks_provider.py`), verified against the real `databricks-sdk` package's actual method signatures and enum values (not guessed), but never exercised against a real workspace. The exact Jobs API `spark_version` cluster identifier for Databricks Runtime 19/18 LTS is a documented placeholder — see `_SPARK_TO_DBR_CLUSTER_VERSION` in `provider.py` — to be confirmed via `WorkspaceClient().clusters.spark_versions()` before any live submission.
