@@ -41,14 +41,17 @@ Portage will not become a notebook environment, BI/dashboard platform, visual ET
 
 ## Status
 
-Pre-Phase-0. Nothing here executes real Spark workloads yet. The current milestone is the **architectural spike**: prove that one unmodified PySpark artifact can run, via the portable contract, on both (Kubernetes + S3) and (Databricks + S3) with semantically equivalent output. See the [Phase 0 milestone](../../milestones) and [`docs/architecture/spec.md` §63](docs/architecture/spec.md) for exit criteria.
+**Phase 0 (architectural spike) — Kubernetes+S3 leg proven live.** `plane run examples/wordcount.yaml --environment k8s-remote` has actually executed a real PySpark artifact on a real Kubernetes cluster via the Apache Spark Kubernetes Operator, reading/writing through an S3-compatible backend, with verified-correct output — not a simulation. See [`docs/providers/kubernetes.md`](docs/providers/kubernetes.md) and [`docs/providers/s3.md`](docs/providers/s3.md). The Databricks+S3 leg remains a translation-layer prototype, tested against a mocked client only — no live workspace credentials were available (tracked in [issue #8](../../issues/8)).
+
+**Now in v0.1 ("Portable Spark Core").** The persistence layer is real: `Environment`/`ExecutionProfile`/`StorageProfile`/`DatasetBinding`/`WorkloadDefinition` are backed by PostgreSQL (`control_plane/db.py`, `models.py`, `repositories.py`, migrated via `alembic/`) with CRUD REST endpoints (`api/routers/`) and read-access CLI commands (`plane environment list`, `plane dataset list`). Run submission (`POST /v1/runs`), the async reconciler, and migrating `plane run` off its current direct-provider-call path are the next backlog items — see the [v0.1 milestone](../../milestones).
 
 ## Repository layout
 
 | Path | Purpose |
 |---|---|
 | `api/` | FastAPI app — REST surface |
-| `control_plane/` | Domain services: validation, resolution, run lifecycle, audit |
+| `control_plane/` | Domain services: validation, resolution, run lifecycle, audit, persistence |
+| `alembic/` | Database migrations (PostgreSQL, via `control_plane/models.py`) |
 | `reconciler/` | Async worker that submits to and polls execution providers |
 | `providers/execution/` | Kubernetes and Databricks execution providers |
 | `providers/storage/` | VAST, S3, ADLS storage providers |

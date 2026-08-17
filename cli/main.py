@@ -8,9 +8,11 @@ because proving portability doesn't require the async reconciler (spec
 providers."""
 
 import asyncio
+import os
 import time
 import uuid
 
+import httpx
 import typer
 from pydantic import ValidationError
 
@@ -28,6 +30,37 @@ from spec.workload.v1alpha1 import parse_workload
 app = typer.Typer(name="plane", no_args_is_help=True)
 workload_app = typer.Typer(no_args_is_help=True)
 app.add_typer(workload_app, name="workload")
+environment_app = typer.Typer(no_args_is_help=True)
+app.add_typer(environment_app, name="environment")
+dataset_app = typer.Typer(no_args_is_help=True)
+app.add_typer(dataset_app, name="dataset")
+
+
+def _api_base_url() -> str:
+    return os.environ.get("PORTAGE_API_URL", "http://localhost:8000")
+
+
+@environment_app.command("list")
+def environment_list() -> None:
+    """List environments registered with the control plane (REST client —
+    spec §31: the CLI talks to the API, never the database directly)."""
+    resp = httpx.get(f"{_api_base_url()}/v1/environments")
+    resp.raise_for_status()
+    for env in resp.json():
+        typer.echo(
+            f"{env['name']}\t{env['execution_provider']}/{env['execution_profile_name']}"
+            f"\t{env['storage_provider']}/{env['storage_profile_name']}"
+        )
+
+
+@dataset_app.command("list")
+def dataset_list(dataset_name: str = typer.Option(None, "--dataset")) -> None:
+    """List dataset bindings registered with the control plane."""
+    params = {"dataset_name": dataset_name} if dataset_name else {}
+    resp = httpx.get(f"{_api_base_url()}/v1/datasets", params=params)
+    resp.raise_for_status()
+    for binding in resp.json():
+        typer.echo(f"{binding['dataset_name']}\t{binding['environment_name']}\t{binding['uri']}")
 
 
 @workload_app.command("validate")
