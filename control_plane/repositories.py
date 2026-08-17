@@ -4,6 +4,7 @@
 portable spec schemas happens in the API layer, not here.
 """
 
+import uuid
 from typing import Literal, overload
 
 from sqlalchemy import select
@@ -13,6 +14,10 @@ from control_plane.models import (
     DatasetBinding,
     Environment,
     ExecutionProfile,
+    IdempotencyKey,
+    ProviderRun,
+    Run,
+    RunEvent,
     StorageProfile,
     WorkloadDefinition,
 )
@@ -279,3 +284,93 @@ async def list_workload_definitions(session: AsyncSession) -> list[WorkloadDefin
         select(WorkloadDefinition).order_by(WorkloadDefinition.name, WorkloadDefinition.version)
     )
     return list(result.scalars().all())
+
+
+# --- Run lifecycle (spec §23-25) -------------------------------------------
+
+
+async def create_run(
+    session: AsyncSession, *, workload_name: str, workload_version: str, environment_name: str, state: str
+) -> Run:
+    run = Run(
+        workload_name=workload_name,
+        workload_version=workload_version,
+        environment_name=environment_name,
+        state=state,
+    )
+    session.add(run)
+    await session.commit()
+    await session.refresh(run)
+    return run
+
+
+async def get_run(session: AsyncSession, run_id: uuid.UUID) -> Run:
+    result = await session.execute(select(Run).where(Run.id == run_id))
+    run = result.scalar_one_or_none()
+    if run is None:
+        raise NotFoundError(f"run '{run_id}' not found")
+    return run
+
+
+async def list_runs_by_state(session: AsyncSession, states: list[str]) -> list[Run]:
+    result = await session.execute(select(Run).where(Run.state.in_(states)).order_by(Run.created_at))
+    return list(result.scalars().all())
+
+
+async def update_run_state(session: AsyncSession, run: Run, new_state: str) -> None:
+    run.state = new_state
+    await session.commit()
+
+
+async def create_provider_run(
+    session: AsyncSession, *, run_id: uuid.UUID, provider_run_id: str, provider: str, raw: dict
+) -> ProviderRun:
+    provider_run = ProviderRun(run_id=run_id, provider_run_id=provider_run_id, provider=provider, raw=raw)
+    session.add(provider_run)
+    await session.commit()
+    await session.refresh(provider_run)
+    return provider_run
+
+
+async def get_latest_provider_run(session: AsyncSession, run_id: uuid.UUID) -> ProviderRun | None:
+    result = await session.execute(
+        select(ProviderRun)
+        .where(ProviderRun.run_id == run_id)
+        .order_by(ProviderRun.created_at.desc())
+    )
+    return result.scalars().first()
+
+
+async def create_run_event(
+    session: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    from_state: str | None,
+    to_state: str,
+    message: str | None = None,
+) -> RunEvent:
+    event = RunEvent(run_id=run_id, from_state=from_state, to_state=to_state, message=message)
+    session.add(event)
+    await session.commit()
+    await session.refresh(event)
+    return event
+
+
+async def list_run_events(session: AsyncSession, run_id: uuid.UUID) -> list[RunEvent]:
+    result = await session.execute(
+        select(RunEvent).where(RunEvent.run_id == run_id).order_by(RunEvent.created_at)
+    )
+    return list(result.scalars().all())
+
+
+async def get_idempotency_key(session: AsyncSession, key: str) -> IdempotencyKey | None:
+    result = await session.execute(select(IdempotencyKey).where(IdempotencyKey.key == key))
+    return result.scalar_one_or_none()
+
+
+async def create_idempotency_key(session: AsyncSession, *, key: str, run_id: uuid.UUID) -> IdempotencyKey:
+    record = IdempotencyKey(key=key, run_id=run_id)
+    session.add(record)
+    await session.commit()
+    await session.refresh(record)
+    return record

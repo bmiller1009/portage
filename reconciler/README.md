@@ -4,4 +4,6 @@ The async worker that owns the submit/poll/converge loop described in `docs/arch
 
 This separation is what makes control-plane failure non-fatal to running Spark jobs (§4.5, ADR 0007): once a workload is submitted, the execution provider owns it, and the reconciler just rediscovers and converges state on restart.
 
-Not yet implemented — v0.1 milestone.
+Implemented and live-verified — `service.py`'s `submit_new_runs()`/`poll_active_runs()` (called by `reconcile_once()`, run continuously by `main.py`) actually submitted a wordcount run to the real remote Kubernetes cluster via `POST /v1/runs`, drove it through `ACCEPTED → QUEUED → SUBMITTING → RUNNING → SUCCEEDED`, and the resulting output was verified correct in MinIO — the full database-backed control-plane path, not the Phase 0 CLI-direct one. Per-run exceptions are caught and turned into a `FAILED` transition rather than crashing the loop (ADR 0007). Tested against real Postgres with a fake `ExecutionProvider` in `tests/integration/db/test_reconciler.py` (CI-run); the live Kubernetes submission was checked by hand, same pattern as the rest of Phase 0/v0.1.
+
+Restart-recovery under an actual control-plane outage (spec §57's mandatory v1.0 acceptance test) isn't exercised yet — this only proves the reconciler drives a run to completion, not that it survives being killed mid-run.

@@ -1,12 +1,21 @@
 """FastAPI control-plane app (docs/architecture/spec.md §30). Health
-endpoints plus CRUD for environments/profiles/datasets/workloads
-(persistence layer — v0.1 backlog issue #17). Run submission/status/cancel/
-logs (§24, §30) are a later v0.1 issue — plane run still calls execution
-providers directly for now (see cli/main.py)."""
+endpoints, CRUD for environments/profiles/datasets/workloads (persistence
+layer — v0.1 issue #17), and run submission (POST /v1/runs, issue #18) —
+async: this only ever writes ACCEPTED and returns; reconciler/service.py
+is what actually submits to an execution provider and advances the state.
+Cancel/logs endpoints and migrating `plane run` off its current
+direct-provider path are issue #20."""
 
 from fastapi import FastAPI
 
-from api.routers import datasets, environments, execution_profiles, storage_profiles, workloads
+from api.routers import (
+    datasets,
+    environments,
+    execution_profiles,
+    runs,
+    storage_profiles,
+    workloads,
+)
 
 app = FastAPI(title="Portage Control Plane")
 
@@ -15,6 +24,7 @@ app.include_router(storage_profiles.router)
 app.include_router(environments.router)
 app.include_router(datasets.router)
 app.include_router(workloads.router)
+app.include_router(runs.router)
 
 
 @app.get("/health")

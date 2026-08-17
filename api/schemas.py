@@ -4,6 +4,8 @@ which reuses spec/workload/v1alpha1.py's SparkWorkload directly since the
 request body *is* a portable workload definition.
 """
 
+import uuid
+
 from pydantic import BaseModel, ConfigDict
 
 
@@ -77,3 +79,27 @@ class WorkloadDefinitionOut(BaseModel):
     name: str
     version: str
     definition: dict
+
+
+class RunCreate(BaseModel):
+    workload_name: str
+    workload_version: str | None = None
+    environment_name: str
+
+
+class RunOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    workload_name: str
+    workload_version: str
+    environment_name: str
+    state: str
+
+
+class RunEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    from_state: str | None
+    to_state: str
+    message: str | None
