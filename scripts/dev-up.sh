@@ -100,6 +100,11 @@ log "Iceberg REST Catalog"
 kubectl --context "$KUBE_CONTEXT" apply -f deploy/dev/iceberg-rest.yaml
 kubectl --context "$KUBE_CONTEXT" -n portage-storage rollout status deployment/iceberg-rest --timeout=120s
 
+# --- 4c. Trino ------------------------------------------------------------------
+log "Trino"
+kubectl --context "$KUBE_CONTEXT" apply -f deploy/dev/trino.yaml
+kubectl --context "$KUBE_CONTEXT" -n portage-query rollout status deployment/trino --timeout=120s
+
 # --- 5. PostgreSQL --------------------------------------------------------------
 log "PostgreSQL ($POSTGRES_CONTAINER on :$POSTGRES_PORT)"
 if docker ps --format '{{.Names}}' | grep -qx "$POSTGRES_CONTAINER"; then

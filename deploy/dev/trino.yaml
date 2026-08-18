@@ -1,0 +1,87 @@
+# Trino (docs/architecture/spec.md §38/§68), in-cluster, namespace
+# portage-query — a distinct namespace from portage-storage since Trino
+# is a query engine composed behind the portability boundary (spec §38:
+# "Do not write a custom SQL engine"), not storage infrastructure itself.
+#
+# The official image already ships sensible single-node defaults
+# (coordinator=true, node-scheduler.include-coordinator=true, plus
+# built-in jmx/memory/tpcds/tpch catalogs) — only the Iceberg catalog
+# file needs adding, mounted via subPath so it doesn't replace the
+# image's existing /etc/trino/catalog/ contents.
+#
+# iceberg.properties uses Trino's native S3 filesystem support (current
+# as of Trino 483 — s3.aws-access-key/secret-key, not Iceberg's own
+# s3.access-key-id/secret-access-key naming used in iceberg-rest.yaml;
+# the two systems have independently-named S3 config despite talking to
+# the same MinIO). Credentials/bucket match the same dev-only values
+# already committed in deploy/dev/minio.yaml and iceberg-rest.yaml.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: portage-query
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trino-catalog-iceberg
+  namespace: portage-query
+data:
+  iceberg.properties: |
+    connector.name=iceberg
+    iceberg.catalog.type=rest
+    iceberg.rest-catalog.uri=http://iceberg-rest.portage-storage.svc.cluster.local:8181
+    iceberg.rest-catalog.warehouse=s3a://portage-local/iceberg-warehouse
+    fs.s3.enabled=true
+    s3.endpoint=http://minio.portage-storage.svc.cluster.local:9000
+    s3.region=us-east-1
+    s3.path-style-access=true
+    s3.aws-access-key=portage-dev
+    s3.aws-secret-key=portage-dev-secret
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: trino
+  namespace: portage-query
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: trino
+  template:
+    metadata:
+      labels:
+        app: trino
+    spec:
+      containers:
+        - name: trino
+          image: trinodb/trino:483
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: iceberg-catalog
+              mountPath: /etc/trino/catalog/iceberg.properties
+              subPath: iceberg.properties
+          readinessProbe:
+            httpGet:
+              path: /v1/info
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 5
+      volumes:
+        - name: iceberg-catalog
+          configMap:
+            name: trino-catalog-iceberg
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: trino
+  namespace: portage-query
+spec:
+  selector:
+    app: trino
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
