@@ -9,6 +9,8 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
+from control_plane.storage_provider import StorageCapabilitySet
+
 
 @dataclass
 class S3ConnectionProfile:
@@ -70,5 +72,5 @@ class S3StorageProvider:
         except (ClientError, BotoCoreError):
             return False
 
-    def capabilities(self) -> dict:
-        return {"protocol": "s3", "pathBindings": True, "tableBindings": False}
+    def capabilities(self) -> StorageCapabilitySet:
+        return StorageCapabilitySet(protocol="s3", path_bindings=True, table_bindings=False)

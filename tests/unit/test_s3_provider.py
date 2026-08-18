@@ -53,3 +53,10 @@ def test_health_check_returns_false_for_unreachable_endpoint():
         access_key="a", secret_key="b", endpoint_url="http://127.0.0.1:1"
     )
     assert S3StorageProvider(profile).health_check() is False
+
+
+def test_capabilities_declares_path_bindings_only(profile):
+    caps = S3StorageProvider(profile).capabilities()
+    assert caps.protocol == "s3"
+    assert caps.path_bindings is True
+    assert caps.table_bindings is False

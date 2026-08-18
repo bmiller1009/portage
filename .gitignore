@@ -37,6 +37,7 @@ examples/wordcount_app/dist/
 .vscode/
 .idea/
 .DS_Store
+.claude/
 
 # Test / coverage
 .coverage
