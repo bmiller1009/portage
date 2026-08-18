@@ -17,7 +17,7 @@ entry point at JVM startup rather than requiring a dynamic import trick.
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Protocol, cast
+from typing import Any, NoReturn, Protocol, cast
 
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
@@ -82,6 +82,16 @@ _SUPPORTED_SPARK_VERSIONS = {"4.1", "4.2"}
 # terminal. 409 (already exists) isn't in here at all: submit() handles it
 # as a recovery signal, not an error (see submit()).
 _RETRYABLE_API_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def _raise_classified(e: ApiException) -> NoReturn:
+    """Shared by status()/cancel() as well as submit() (spec §56's "network
+    interruption after submission" scenario — a transient API blip while
+    polling or canceling deserves the same retry treatment as one during
+    submission, not an immediate FAILED for a run that's actually fine)."""
+    if e.status in _RETRYABLE_API_STATUS_CODES:
+        raise RetryableProviderError(str(e)) from e
+    raise TerminalProviderError(str(e)) from e
 
 
 class CustomObjectsApiLike(Protocol):
@@ -293,19 +303,20 @@ class KubernetesExecutionProvider:
                     name=manifest["metadata"]["name"],
                 )
                 return ProviderRun(provider_run_id=existing["metadata"]["name"], raw=existing)
-            if e.status in _RETRYABLE_API_STATUS_CODES:
-                raise RetryableProviderError(str(e)) from e
-            raise TerminalProviderError(str(e)) from e
+            _raise_classified(e)
 
     async def status(self, provider_run_id: str) -> ProviderStatus:
-        obj = await asyncio.to_thread(
-            self._api.get_namespaced_custom_object,
-            group=SPARK_APPLICATION_GROUP,
-            version=SPARK_APPLICATION_VERSION,
-            namespace=self.profile.namespace,
-            plural=SPARK_APPLICATION_PLURAL,
-            name=provider_run_id,
-        )
+        try:
+            obj = await asyncio.to_thread(
+                self._api.get_namespaced_custom_object,
+                group=SPARK_APPLICATION_GROUP,
+                version=SPARK_APPLICATION_VERSION,
+                namespace=self.profile.namespace,
+                plural=SPARK_APPLICATION_PLURAL,
+                name=provider_run_id,
+            )
+        except ApiException as e:
+            _raise_classified(e)
         status_obj = obj.get("status") or {}
         native_state = status_obj.get("currentState", {}).get("currentStateSummary")
         if native_state is None:
@@ -322,14 +333,22 @@ class KubernetesExecutionProvider:
         )
 
     async def cancel(self, provider_run_id: str) -> None:
-        await asyncio.to_thread(
-            self._api.delete_namespaced_custom_object,
-            group=SPARK_APPLICATION_GROUP,
-            version=SPARK_APPLICATION_VERSION,
-            namespace=self.profile.namespace,
-            plural=SPARK_APPLICATION_PLURAL,
-            name=provider_run_id,
-        )
+        try:
+            await asyncio.to_thread(
+                self._api.delete_namespaced_custom_object,
+                group=SPARK_APPLICATION_GROUP,
+                version=SPARK_APPLICATION_VERSION,
+                namespace=self.profile.namespace,
+                plural=SPARK_APPLICATION_PLURAL,
+                name=provider_run_id,
+            )
+        except ApiException as e:
+            if e.status == 404:
+                # Already gone (e.g. a prior cancel attempt already
+                # deleted it before a crash/retry) — cancel is meant to
+                # ensure absence, so this is success, not an error.
+                return
+            _raise_classified(e)
 
     async def logs(self, provider_run_id: str) -> LogReference:
         # The label is spark.operator/spark-app-name (this operator's own

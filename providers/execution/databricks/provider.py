@@ -248,7 +248,17 @@ class DatabricksExecutionProvider:
             raise TerminalProviderError(str(e)) from e
 
     async def status(self, provider_run_id: str) -> ProviderStatus:
-        run = self._get_client().jobs.get_run(run_id=int(provider_run_id))
+        try:
+            run = self._get_client().jobs.get_run(run_id=int(provider_run_id))
+        except _RETRYABLE_DATABRICKS_ERRORS as e:
+            # spec §56's "network interruption after submission" — a
+            # transient API blip while polling deserves the same retry
+            # treatment as one during submission, not an immediate FAILED
+            # for a run that's actually fine.
+            raise RetryableProviderError(str(e)) from e
+        except DatabricksError as e:
+            raise TerminalProviderError(str(e)) from e
+
         state = run.state
         if state is None:
             return ProviderStatus(state=RunState.UNKNOWN, provider_native_status="UNREPORTED")
@@ -266,7 +276,17 @@ class DatabricksExecutionProvider:
         return ProviderStatus(state=canonical, provider_native_status=native)
 
     async def cancel(self, provider_run_id: str) -> None:
-        self._get_client().jobs.cancel_run(run_id=int(provider_run_id))
+        try:
+            self._get_client().jobs.cancel_run(run_id=int(provider_run_id))
+        except dbx_errors.NotFound:
+            # Already gone (e.g. a prior cancel attempt already canceled
+            # it before a crash/retry) — cancel is meant to ensure a
+            # non-running state, so this is success, not an error.
+            return
+        except _RETRYABLE_DATABRICKS_ERRORS as e:
+            raise RetryableProviderError(str(e)) from e
+        except DatabricksError as e:
+            raise TerminalProviderError(str(e)) from e
 
     async def logs(self, provider_run_id: str) -> LogReference:
         return LogReference(

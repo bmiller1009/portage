@@ -5,6 +5,7 @@ verified by hand against the real remote cluster (see docs/providers/
 kubernetes.md and the plan for this slice)."""
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import update
@@ -24,21 +25,41 @@ from reconciler import service as reconciler_service
 
 
 class FakeExecutionProvider:
+    """list_runs_by_state() (used by both submit_new_runs() and
+    poll_active_runs()) is a GLOBAL query against this long-lived, shared
+    Postgres, and provider_factory.build_execution_provider() gets
+    monkeypatched to return THIS instance regardless of which run's
+    execution_profile is actually asking — so an unrelated leftover
+    active run from a different test (past or concurrent) can genuinely
+    get routed through this same fake within a single poll_active_runs()
+    sweep. A unique, per-instance provider_run_id (not a hardcoded
+    literal every test's FakeExecutionProvider used to share) plus
+    ignoring status()/cancel() calls for any other id keeps this
+    instance's own stateful behavior (_statuses popping) from being
+    corrupted by — or corrupting — a run it doesn't actually own."""
+
     def __init__(self, statuses: list[RunState]):
         self._statuses = list(statuses)
+        self.provider_run_id = f"fake-provider-run-{uuid4().hex[:8]}"
 
     async def validate(self, workload):
         return ValidationResult(valid=True)
 
     async def submit(self, run):
-        return ProviderRun(provider_run_id="fake-provider-run-1", raw={"ok": True})
+        return ProviderRun(provider_run_id=self.provider_run_id, raw={"ok": True})
 
     async def status(self, provider_run_id):
+        if provider_run_id != self.provider_run_id:
+            # Not mine — a safe no-op (retryable, no state transition)
+            # rather than guessing at a state that could incorrectly
+            # advance or fail a run this fake doesn't actually own.
+            raise RetryableProviderError(f"unrecognized provider_run_id: {provider_run_id}")
         state = self._statuses.pop(0) if len(self._statuses) > 1 else self._statuses[0]
         return ProviderStatus(state=state, provider_native_status=state.value)
 
     async def cancel(self, provider_run_id):
-        pass
+        if provider_run_id != self.provider_run_id:
+            raise RetryableProviderError(f"unrecognized provider_run_id: {provider_run_id}")
 
     async def logs(self, provider_run_id):
         return LogReference(description="fake")
@@ -150,7 +171,7 @@ async def test_reconcile_once_advances_run_to_succeeded(
 
     provider_run = await repositories.get_latest_provider_run(session, run.id)
     assert provider_run is not None
-    assert provider_run.provider_run_id == "fake-provider-run-1"
+    assert provider_run.provider_run_id == fake_provider.provider_run_id
 
 
 @pytest.mark.asyncio
@@ -223,7 +244,7 @@ async def test_cancel_runs_calls_provider_cancel_and_finalizes(
 
     run = await run_service.get_run(session, run.id)
     assert run.state == RunState.CANCELED.value
-    assert cancelled_ids == ["fake-provider-run-1"]
+    assert cancelled_ids == [fake_provider.provider_run_id]
 
     events = await run_service.list_run_events(session, run.id)
     assert [e.to_state for e in events] == [
@@ -264,7 +285,13 @@ async def test_reconcile_once_transitions_to_failed_on_missing_dataset_binding(
 
     run = await run_service.get_run(session, run.id)
     assert run.state == RunState.FAILED.value
-    assert _counter_value("portage_provider_errors_total") == errors_before + 1
+    # >= rather than == : this counter is process-global, and a stray
+    # active run from elsewhere in this long-lived shared Postgres can
+    # legitimately add its own (safe, no-op) retryable-error increment if
+    # it gets swept into this same poll_active_runs() call — see
+    # FakeExecutionProvider's docstring above. The one guarantee this
+    # test actually cares about is that ITS OWN error was counted at all.
+    assert _counter_value("portage_provider_errors_total") >= errors_before + 1
 
 
 @pytest.mark.asyncio
@@ -309,7 +336,7 @@ async def test_stuck_submitting_run_is_recovered_not_reblown(
     assert run.state == RunState.QUEUED.value
     provider_run = await repositories.get_latest_provider_run(session, run.id)
     assert provider_run is not None
-    assert provider_run.provider_run_id == "fake-provider-run-1"
+    assert provider_run.provider_run_id == fake_provider.provider_run_id
 
 
 @pytest.mark.asyncio
@@ -395,3 +422,158 @@ async def test_retryable_submission_error_fails_after_max_attempts(
     last_event = (await run_service.list_run_events(session, run.id))[-1]
     assert last_event.message is not None
     assert "exceeded max submission attempts" in last_event.message
+
+
+@pytest.mark.asyncio
+async def test_poll_survives_a_transient_status_error(session, environment_name, workload_ref, monkeypatch):
+    """Spec §56's "network interruption after submission": a transient
+    status() blip must not fail a run that's actually fine -- it should
+    just be retried on the next tick.
+
+    list_runs_by_state() is a GLOBAL query (not scoped to this test's own
+    run) against this long-lived, shared Postgres — a different, unrelated
+    leftover active run from another test could be polled through this
+    same fake provider in the same tick. This fake is deliberately keyed
+    by provider_run_id (not a shared call counter or a shared _statuses
+    list) so that kind of cross-test interference can't change its
+    behavior for THIS test's own run — see test_artifacts.py's
+    FakeExecutionProvider for the same hazard documented independently."""
+
+    class FlakyThenOkStatusProvider:
+        def __init__(self, *, target_provider_run_id: str):
+            self._target = target_provider_run_id
+            self._calls_for_target = 0
+
+        async def validate(self, workload):
+            return ValidationResult(valid=True)
+
+        async def submit(self, run):
+            return ProviderRun(provider_run_id=self._target, raw={"ok": True})
+
+        async def status(self, provider_run_id):
+            if provider_run_id != self._target:
+                return ProviderStatus(state=RunState.RUNNING, provider_native_status="RUNNING")
+            self._calls_for_target += 1
+            if self._calls_for_target == 1:
+                raise RetryableProviderError("transient 503")
+            return ProviderStatus(state=RunState.RUNNING, provider_native_status="RUNNING")
+
+        async def cancel(self, provider_run_id):
+            pass
+
+        async def logs(self, provider_run_id):
+            return LogReference(description="fake")
+
+        async def capabilities(self):
+            return CapabilitySet(
+                spark_versions=["4.2"],
+                languages=["python"],
+                dynamic_allocation=False,
+                gpu=False,
+                streaming=False,
+                local_disk=True,
+                spark_connect=False,
+            )
+
+    flaky_provider = FlakyThenOkStatusProvider(target_provider_run_id=f"fake-provider-run-{uuid4().hex[:8]}")
+    monkeypatch.setattr(
+        provider_factory, "build_execution_provider", lambda execution_profile: flaky_provider
+    )
+    monkeypatch.setattr(provider_factory, "build_storage_config", lambda storage_profile: {})
+    monkeypatch.setattr(provider_factory, "build_storage_volume_mounts", lambda storage_profile: None)
+
+    await _seed_dataset_bindings(session, environment_name)
+    workload_name, workload_version = workload_ref
+    run, _created = await run_service.create_run(
+        session,
+        workload_name=workload_name,
+        workload_version=workload_version,
+        environment_name=environment_name,
+    )
+
+    # First tick: submits -> QUEUED, then the same-tick poll_active_runs()
+    # call already reaches this run and hits its first (raising) status()
+    # call -> stays QUEUED, NOT FAILED.
+    await reconciler_service.reconcile_once(session)
+    run = await run_service.get_run(session, run.id)
+    assert run.state == RunState.QUEUED.value
+
+    # Second tick: status() succeeds -> RUNNING, same as the happy path.
+    await reconciler_service.reconcile_once(session)
+    run = await run_service.get_run(session, run.id)
+    assert run.state == RunState.RUNNING.value
+
+
+@pytest.mark.asyncio
+async def test_cancel_survives_a_transient_cancel_error(session, environment_name, workload_ref, monkeypatch):
+    """Same cross-test-pollution caution as test_poll_survives_a_transient_
+    status_error above — keyed by provider_run_id, not a shared counter."""
+
+    class FlakyThenOkCancelProvider:
+        def __init__(self, *, target_provider_run_id: str):
+            self._target = target_provider_run_id
+            self._cancel_calls_for_target = 0
+
+        async def validate(self, workload):
+            return ValidationResult(valid=True)
+
+        async def submit(self, run):
+            return ProviderRun(provider_run_id=self._target, raw={"ok": True})
+
+        async def status(self, provider_run_id):
+            return ProviderStatus(state=RunState.RUNNING, provider_native_status="RUNNING")
+
+        async def cancel(self, provider_run_id):
+            if provider_run_id != self._target:
+                return
+            self._cancel_calls_for_target += 1
+            if self._cancel_calls_for_target == 1:
+                raise RetryableProviderError("transient 429")
+
+        async def logs(self, provider_run_id):
+            return LogReference(description="fake")
+
+        async def capabilities(self):
+            return CapabilitySet(
+                spark_versions=["4.2"],
+                languages=["python"],
+                dynamic_allocation=False,
+                gpu=False,
+                streaming=False,
+                local_disk=True,
+                spark_connect=False,
+            )
+
+    flaky_provider = FlakyThenOkCancelProvider(target_provider_run_id=f"fake-provider-run-{uuid4().hex[:8]}")
+    monkeypatch.setattr(
+        provider_factory, "build_execution_provider", lambda execution_profile: flaky_provider
+    )
+    monkeypatch.setattr(provider_factory, "build_storage_config", lambda storage_profile: {})
+    monkeypatch.setattr(provider_factory, "build_storage_volume_mounts", lambda storage_profile: None)
+
+    await _seed_dataset_bindings(session, environment_name)
+    workload_name, workload_version = workload_ref
+    run, _created = await run_service.create_run(
+        session,
+        workload_name=workload_name,
+        workload_version=workload_version,
+        environment_name=environment_name,
+    )
+
+    await reconciler_service.reconcile_once(session)
+    run = await run_service.get_run(session, run.id)
+    assert run.state == RunState.RUNNING.value
+
+    _result, pending = await run_service.cancel_run(session, run.id)
+    assert pending is True
+
+    # First cancel_runs() tick: cancel() raises RetryableProviderError ->
+    # stays CANCELING, NOT FAILED.
+    await reconciler_service.cancel_runs(session)
+    run = await run_service.get_run(session, run.id)
+    assert run.state == RunState.CANCELING.value
+
+    # Second tick: cancel() succeeds -> CANCELED.
+    await reconciler_service.cancel_runs(session)
+    run = await run_service.get_run(session, run.id)
+    assert run.state == RunState.CANCELED.value

@@ -22,6 +22,8 @@ class FakeCustomObjectsApi:
         self.deleted_name: str | None = None
         self.status_to_return: dict = {}
         self.raise_on_create: Exception | None = None
+        self.raise_on_get: Exception | None = None
+        self.raise_on_delete: Exception | None = None
         self.get_call_count = 0
 
     def create_namespaced_custom_object(self, *, group, version, namespace, plural, body):
@@ -31,10 +33,14 @@ class FakeCustomObjectsApi:
         return body
 
     def get_namespaced_custom_object(self, *, group, version, namespace, plural, name):
+        if self.raise_on_get is not None:
+            raise self.raise_on_get
         self.get_call_count += 1
         return {"metadata": {"name": name}, "status": self.status_to_return}
 
     def delete_namespaced_custom_object(self, *, group, version, namespace, plural, name):
+        if self.raise_on_delete is not None:
+            raise self.raise_on_delete
         self.deleted_name = name
 
 
@@ -212,6 +218,61 @@ def test_submit_raises_terminal_on_other_api_status(profile, resolved_run):
 
     with pytest.raises(TerminalProviderError):
         asyncio.run(provider.submit(resolved_run))
+
+
+def test_status_raises_retryable_on_transient_api_status(profile):
+    """Spec §56's "network interruption after submission" — a transient
+    blip while polling status must be retryable, not an immediate FAILED
+    for a run that's actually fine."""
+    from kubernetes.client.exceptions import ApiException
+
+    from control_plane.execution_provider import RetryableProviderError
+
+    fake_api = FakeCustomObjectsApi()
+    fake_api.raise_on_get = ApiException(status=503, reason="service unavailable")
+    provider = KubernetesExecutionProvider(profile, api_client=fake_api)
+
+    with pytest.raises(RetryableProviderError):
+        asyncio.run(provider.status("wordcount-abc123"))
+
+
+def test_status_raises_terminal_on_other_api_status(profile):
+    from kubernetes.client.exceptions import ApiException
+
+    from control_plane.execution_provider import TerminalProviderError
+
+    fake_api = FakeCustomObjectsApi()
+    fake_api.raise_on_get = ApiException(status=404, reason="not found")
+    provider = KubernetesExecutionProvider(profile, api_client=fake_api)
+
+    with pytest.raises(TerminalProviderError):
+        asyncio.run(provider.status("wordcount-abc123"))
+
+
+def test_cancel_raises_retryable_on_transient_api_status(profile):
+    from kubernetes.client.exceptions import ApiException
+
+    from control_plane.execution_provider import RetryableProviderError
+
+    fake_api = FakeCustomObjectsApi()
+    fake_api.raise_on_delete = ApiException(status=429, reason="rate limited")
+    provider = KubernetesExecutionProvider(profile, api_client=fake_api)
+
+    with pytest.raises(RetryableProviderError):
+        asyncio.run(provider.cancel("wordcount-abc123"))
+
+
+def test_cancel_treats_already_gone_as_success(profile):
+    """A 404 on delete means a prior cancel attempt already removed it
+    (crash recovery/HA race) — cancel() ensures absence, so this is
+    success, not an error."""
+    from kubernetes.client.exceptions import ApiException
+
+    fake_api = FakeCustomObjectsApi()
+    fake_api.raise_on_delete = ApiException(status=404, reason="not found")
+    provider = KubernetesExecutionProvider(profile, api_client=fake_api)
+
+    asyncio.run(provider.cancel("wordcount-abc123"))  # no exception == pass
 
 
 @pytest.mark.parametrize(

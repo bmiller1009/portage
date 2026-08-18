@@ -30,6 +30,8 @@ class FakeJobsAPI:
         self.canceled_run_id: int | None = None
         self.run_to_return: SimpleNamespace | None = None
         self.raise_on_submit: Exception | None = None
+        self.raise_on_get_run: Exception | None = None
+        self.raise_on_cancel_run: Exception | None = None
 
     def submit(self, *, run_name, tasks, idempotency_token=None):
         if self.raise_on_submit is not None:
@@ -40,9 +42,13 @@ class FakeJobsAPI:
         return SimpleNamespace(run_id=42)
 
     def get_run(self, *, run_id):
+        if self.raise_on_get_run is not None:
+            raise self.raise_on_get_run
         return self.run_to_return
 
     def cancel_run(self, *, run_id):
+        if self.raise_on_cancel_run is not None:
+            raise self.raise_on_cancel_run
         self.canceled_run_id = run_id
 
 
@@ -245,6 +251,63 @@ def test_submit_raises_terminal_on_permanent_databricks_error(profile, resolved_
 
     with pytest.raises(TerminalProviderError):
         asyncio.run(provider.submit(resolved_run))
+
+
+def test_status_raises_retryable_on_transient_databricks_error(profile):
+    """Spec §56's "network interruption after submission" — a transient
+    blip while polling status must be retryable, not an immediate FAILED
+    for a run that's actually fine."""
+    from databricks.sdk import errors as dbx_errors
+
+    from control_plane.execution_provider import RetryableProviderError
+
+    fake_jobs = FakeJobsAPI()
+    fake_jobs.raise_on_get_run = dbx_errors.TemporarilyUnavailable("simulated 503")
+    provider = DatabricksExecutionProvider(profile, client=cast(WorkspaceClientLike, SimpleNamespace(jobs=fake_jobs)))
+
+    with pytest.raises(RetryableProviderError):
+        asyncio.run(provider.status("42"))
+
+
+def test_status_raises_terminal_on_expired_credentials(profile):
+    """Expired credentials (spec §56) must not be retried -- retrying
+    with the same expired token can't ever succeed."""
+    from databricks.sdk import errors as dbx_errors
+
+    from control_plane.execution_provider import TerminalProviderError
+
+    fake_jobs = FakeJobsAPI()
+    fake_jobs.raise_on_get_run = dbx_errors.Unauthenticated("token expired")
+    provider = DatabricksExecutionProvider(profile, client=cast(WorkspaceClientLike, SimpleNamespace(jobs=fake_jobs)))
+
+    with pytest.raises(TerminalProviderError):
+        asyncio.run(provider.status("42"))
+
+
+def test_cancel_raises_retryable_on_transient_databricks_error(profile):
+    from databricks.sdk import errors as dbx_errors
+
+    from control_plane.execution_provider import RetryableProviderError
+
+    fake_jobs = FakeJobsAPI()
+    fake_jobs.raise_on_cancel_run = dbx_errors.TooManyRequests("rate limited")
+    provider = DatabricksExecutionProvider(profile, client=cast(WorkspaceClientLike, SimpleNamespace(jobs=fake_jobs)))
+
+    with pytest.raises(RetryableProviderError):
+        asyncio.run(provider.cancel("42"))
+
+
+def test_cancel_treats_already_gone_as_success(profile):
+    """A NotFound on cancel_run means a prior cancel attempt already
+    canceled it (crash recovery/HA race) -- cancel() ensures a
+    non-running state, so this is success, not an error."""
+    from databricks.sdk import errors as dbx_errors
+
+    fake_jobs = FakeJobsAPI()
+    fake_jobs.raise_on_cancel_run = dbx_errors.NotFound("already gone")
+    provider = DatabricksExecutionProvider(profile, client=cast(WorkspaceClientLike, SimpleNamespace(jobs=fake_jobs)))
+
+    asyncio.run(provider.cancel("42"))  # no exception == pass
 
 
 @pytest.mark.parametrize(

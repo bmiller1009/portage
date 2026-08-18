@@ -206,7 +206,19 @@ async def poll_active_runs(session: AsyncSession) -> None:
             )
             provider = provider_factory.build_execution_provider(execution_profile)
 
-            status = await provider.status(provider_run.provider_run_id)
+            try:
+                status = await provider.status(provider_run.provider_run_id)
+            except RetryableProviderError as e:
+                # spec §56's "network interruption after submission" — a
+                # transient status() blip must not fail a run that's
+                # actually fine. Skip this tick; the run stays in its
+                # current active state and gets polled again next tick.
+                metrics.provider_errors_total.add(1)
+                await run_service.transition_run_state(
+                    session, run, RunState(run.state), message=f"transient poll error, retrying: {e}"
+                )
+                continue
+
             if status.state.value != run.state:
                 if status.state == RunState.RUNNING:
                     queued_at = await _event_timestamp(session, run.id, RunState.QUEUED.value)
@@ -225,7 +237,9 @@ async def poll_active_runs(session: AsyncSession) -> None:
                 )
         except Exception as e:  # noqa: BLE001 - same rationale as submit_new_runs
             metrics.provider_errors_total.add(1)
-            await run_service.transition_run_state(session, run, RunState.FAILED, message=str(e))
+            await run_service.transition_run_state(
+                session, run, RunState.FAILED, message=f"unclassified error: {e}"
+            )
 
 
 async def cancel_runs(session: AsyncSession) -> None:
@@ -243,11 +257,24 @@ async def cancel_runs(session: AsyncSession) -> None:
             )
             provider = provider_factory.build_execution_provider(execution_profile)
 
-            await provider.cancel(provider_run.provider_run_id)
+            try:
+                await provider.cancel(provider_run.provider_run_id)
+            except RetryableProviderError as e:
+                # Same reasoning as poll_active_runs() — a transient
+                # cancel() blip must not fail a cancel that would
+                # otherwise succeed; stays CANCELING, retried next tick.
+                metrics.provider_errors_total.add(1)
+                await run_service.transition_run_state(
+                    session, run, RunState.CANCELING, message=f"transient cancel error, retrying: {e}"
+                )
+                continue
+
             await run_service.transition_run_state(session, run, RunState.CANCELED, message="canceled")
         except Exception as e:  # noqa: BLE001 - same rationale as submit_new_runs
             metrics.provider_errors_total.add(1)
-            await run_service.transition_run_state(session, run, RunState.FAILED, message=str(e))
+            await run_service.transition_run_state(
+                session, run, RunState.FAILED, message=f"unclassified error: {e}"
+            )
 
 
 async def reconcile_once(session: AsyncSession) -> None:
