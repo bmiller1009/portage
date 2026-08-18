@@ -408,6 +408,19 @@ async def list_runs_by_state(session: AsyncSession, states: list[str]) -> list[R
     return list(result.scalars().all())
 
 
+async def list_runs(
+    session: AsyncSession, *, environment_name: str | None = None, limit: int = 100
+) -> list[Run]:
+    """Most-recent-first (spec §32's Runs page lists recent activity, not
+    a full history browser) — unlike list_runs_by_state, which orders
+    oldest-first since the reconciler processes runs in submission order."""
+    query = select(Run)
+    if environment_name is not None:
+        query = query.where(Run.environment_name == environment_name)
+    result = await session.execute(query.order_by(Run.created_at.desc()).limit(limit))
+    return list(result.scalars().all())
+
+
 async def update_run_state(session: AsyncSession, run: Run, new_state: str) -> None:
     run.state = new_state
     await session.commit()

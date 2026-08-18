@@ -15,6 +15,7 @@ own :9091/metrics instead (reconciler/main.py) — separate process, separate
 memory, see control_plane/metrics.py's docstring for why."""
 
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CONTENT_TYPE_LATEST
 
 from api.routers import (
@@ -22,6 +23,7 @@ from api.routers import (
     datasets,
     environments,
     execution_profiles,
+    providers,
     runs,
     storage_profiles,
     validate,
@@ -31,6 +33,15 @@ from control_plane import metrics
 
 app = FastAPI(title="Portage Control Plane")
 
+# ui/ (spec §32) is a separate Vite dev server on its own port, so it's a
+# cross-origin caller of this API by construction — allowing all origins
+# is a dev-only stance (no cookies/credentials are ever sent, spec §33's
+# auth model doesn't exist yet either), not something to carry into a
+# real deployment unreviewed.
+app.add_middleware(
+    CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
+)
+
 app.include_router(execution_profiles.router)
 app.include_router(storage_profiles.router)
 app.include_router(environments.router)
@@ -39,6 +50,7 @@ app.include_router(artifacts.router)
 app.include_router(workloads.router)
 app.include_router(runs.router)
 app.include_router(validate.router)
+app.include_router(providers.router)
 
 
 def _route_path(request: Request) -> str:

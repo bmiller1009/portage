@@ -63,7 +63,10 @@ def build_execution_provider(execution_profile: ExecutionProfile) -> ExecutionPr
     raise UnsupportedProviderError(f"unsupported execution provider: {execution_profile.provider}")
 
 
-def _build_storage_provider(storage_profile: StorageProfile) -> StorageProvider:
+def build_storage_provider(storage_profile: StorageProfile) -> StorageProvider:
+    """Public — used directly by callers that need the live provider
+    itself (e.g. the /v1/providers/{name}/capabilities endpoint), not
+    just derived spark_config/volume_mounts values."""
     if storage_profile.provider == "s3":
         access_key, secret_key = resolve_s3_credentials(storage_profile.credential_reference)
         config = storage_profile.config
@@ -109,7 +112,7 @@ def _build_storage_provider(storage_profile: StorageProfile) -> StorageProvider:
 
 
 def build_storage_config(storage_profile: StorageProfile) -> dict[str, str]:
-    return _build_storage_provider(storage_profile).spark_config()
+    return build_storage_provider(storage_profile).spark_config()
 
 
 def build_storage_volume_mounts(storage_profile: StorageProfile) -> list[dict] | None:
@@ -119,4 +122,4 @@ def build_storage_volume_mounts(storage_profile: StorageProfile) -> list[dict] |
     ever needs the flat spark_config dict, and constructing the provider
     twice for NFS mode is cheap (no I/O in any storage provider's
     constructor)."""
-    return _build_storage_provider(storage_profile).volume_mounts()
+    return build_storage_provider(storage_profile).volume_mounts()

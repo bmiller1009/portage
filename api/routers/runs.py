@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.schemas import RunCreate, RunEventOut, RunLogsOut, RunOut
@@ -35,6 +35,14 @@ async def create_run(
 
     response.status_code = 202 if created else 200
     return run
+
+
+@router.get("", response_model=list[RunOut])
+async def list_runs(
+    environment_name: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_db_session),
+):
+    return await run_service.list_runs(session, environment_name=environment_name)
 
 
 @router.get("/{run_id}", response_model=RunOut)

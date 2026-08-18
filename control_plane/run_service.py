@@ -65,6 +65,10 @@ async def get_run(session: AsyncSession, run_id: uuid.UUID) -> Run:
     return await repositories.get_run(session, run_id)
 
 
+async def list_runs(session: AsyncSession, *, environment_name: str | None = None) -> list[Run]:
+    return await repositories.list_runs(session, environment_name=environment_name)
+
+
 async def list_run_events(session: AsyncSession, run_id: uuid.UUID):
     return await repositories.list_run_events(session, run_id)
 

@@ -5,6 +5,8 @@ request body *is* a portable workload definition.
 """
 
 import uuid
+from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
 
@@ -115,6 +117,11 @@ class RunOut(BaseModel):
     workload_version: str
     environment_name: str
     state: str
+    # Always set on a real (DB-persisted) Run — server_default NOT NULL
+    # columns — optional here only so router-layer tests can construct a
+    # bare Run(...) in memory without a real session and still serialize.
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
 
 
 class RunEventOut(BaseModel):
@@ -130,6 +137,19 @@ class RunLogsOut(BaseModel):
 
     description: str
     uri: str | None
+
+
+class ProviderOut(BaseModel):
+    name: str
+    kind: Literal["execution", "storage"]
+    provider: str
+
+
+class ProviderCapabilitiesOut(BaseModel):
+    name: str
+    kind: Literal["execution", "storage"]
+    provider: str
+    capabilities: dict
 
 
 class ValidateRequest(BaseModel):

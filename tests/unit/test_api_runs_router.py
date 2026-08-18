@@ -40,6 +40,29 @@ def test_create_run_returns_202_for_new_run(monkeypatch):
     assert resp.json()["state"] == "ACCEPTED"
 
 
+def test_list_runs_returns_runs(monkeypatch):
+    mock_list = AsyncMock(
+        return_value=[
+            Run(
+                id=uuid.uuid4(),
+                workload_name="wordcount",
+                workload_version="0.1.0",
+                environment_name="k8s-remote",
+                state="SUCCEEDED",
+            )
+        ]
+    )
+    monkeypatch.setattr(run_service, "list_runs", mock_list)
+
+    resp = client.get("/v1/runs", params={"environment_name": "k8s-remote"})
+
+    assert resp.status_code == 200
+    assert resp.json()[0]["state"] == "SUCCEEDED"
+    mock_list.assert_awaited_once()
+    assert mock_list.await_args is not None
+    assert mock_list.await_args.kwargs["environment_name"] == "k8s-remote"
+
+
 def test_create_run_replay_returns_200_for_existing_run(monkeypatch):
     run = Run(
         id=uuid.uuid4(),

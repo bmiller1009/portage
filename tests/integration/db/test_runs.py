@@ -14,6 +14,25 @@ def _unique(prefix: str) -> str:
 
 
 @pytest.mark.asyncio
+async def test_list_runs_filters_by_environment_and_orders_newest_first(
+    session, environment_name, workload_ref
+):
+    workload_name, workload_version = workload_ref
+    run1, _ = await run_service.create_run(
+        session, workload_name=workload_name, workload_version=workload_version,
+        environment_name=environment_name,
+    )
+    run2, _ = await run_service.create_run(
+        session, workload_name=workload_name, workload_version=workload_version,
+        environment_name=environment_name,
+    )
+
+    runs = await run_service.list_runs(session, environment_name=environment_name)
+
+    assert [r.id for r in runs] == [run2.id, run1.id]
+
+
+@pytest.mark.asyncio
 async def test_create_run_starts_accepted_and_transitions_log_events(
     session, environment_name, workload_ref
 ):
