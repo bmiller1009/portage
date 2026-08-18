@@ -1,0 +1,33 @@
+# Supplementary RBAC for the spark-kubernetes-operator Helm chart
+# (docs/providers/kubernetes.md) — additive, not an edit to the
+# chart-owned spark-workload-clusterrole. The chart's default role grants
+# `delete` but not `deletecollection`; Spark's own Kubernetes scheduler
+# backend cleans up executors via a label-selector bulk delete, which
+# needs `deletecollection` specifically. Without it, the driver's
+# *shutdown* throws even when the actual computation succeeded (a
+# non-fatal error, but noisy) — confirmed live for pods/configmaps during
+# Phase 0, and for persistentvolumeclaims during #21's JVM JAR
+# verification (shuffle-heavy jobs create PVCs the wheel-only wordcount
+# workload never did).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spark-workload-deletecollection
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "configmaps", "persistentvolumeclaims"]
+    verbs: ["deletecollection"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spark-workload-deletecollection
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: spark-workload-deletecollection
+subjects:
+  - kind: ServiceAccount
+    name: spark
+    namespace: default

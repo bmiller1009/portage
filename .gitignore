@@ -19,7 +19,13 @@ ui/.vite/
 
 # Kubernetes / local dev
 .kube/
-kind-config.yaml
+# deploy/dev/kind-config.yaml is the committed, versioned dev cluster
+# config (issue #23) — intentionally NOT ignored.
+.dev-api.log
+.dev-api.pid
+.dev-reconciler.log
+.dev-reconciler.pid
+examples/wordcount_app/dist/
 
 # Env / secrets
 .env

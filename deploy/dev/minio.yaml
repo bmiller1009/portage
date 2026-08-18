@@ -1,0 +1,52 @@
+# MinIO (S3-API-compatible storage), in-cluster, namespace portage-storage
+# — the shape live-verified during Phase 0 (docs/providers/s3.md).
+# MINIO_ROOT_USER/PASSWORD here are dev-only credentials, never used
+# outside this local kind cluster — fine to commit.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: portage-storage
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: portage-storage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio:latest
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              value: portage-dev
+            - name: MINIO_ROOT_PASSWORD
+              value: portage-dev-secret
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: portage-storage
+spec:
+  selector:
+    app: minio
+  ports:
+    - name: api
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001

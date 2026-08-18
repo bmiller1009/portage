@@ -43,9 +43,9 @@ Portage will not become a notebook environment, BI/dashboard platform, visual ET
 
 **Phase 0 (architectural spike) — Kubernetes+S3 leg proven live.** `plane run examples/wordcount.yaml --environment k8s-remote` has actually executed a real PySpark artifact on a real Kubernetes cluster via the Apache Spark Kubernetes Operator, reading/writing through an S3-compatible backend, with verified-correct output — not a simulation. See [`docs/providers/kubernetes.md`](docs/providers/kubernetes.md) and [`docs/providers/s3.md`](docs/providers/s3.md). The Databricks+S3 leg remains a translation-layer prototype, tested against a mocked client only — no live workspace credentials were available (tracked in [issue #8](../../issues/8)).
 
-**Now in v0.1 ("Portable Spark Core").** The persistence layer is real (`control_plane/db.py`/`models.py`/`repositories.py`, migrated via `alembic/`), and so is the async submission/cancellation path the spec describes (§24): `POST /v1/runs` persists `ACCEPTED` and returns immediately; `reconciler/service.py` picks it up, resolves the environment from the database, submits to the real execution provider, and (on `DELETE /v1/runs/{id}`) cancels it. `plane` (the CLI) is now a pure REST client — no more direct provider access. Both execution providers support JVM JAR artifacts (`mainClass`/`jars` on Kubernetes, `SparkJarTask` on Databricks) alongside Python wheels, and both run real capability matching (spec §20-21) — `plane workload validate --environment` fails fast on an incompatible workload before any submission is attempted. `GET /metrics` (API) and `:9091/metrics` (reconciler) expose OpenTelemetry-instrumented Prometheus metrics (spec §29): run counts, submission/queue/execution-duration histograms, API error rates, provider errors, reconciliation lag.
+**v0.1 ("Portable Spark Core") is complete.** The persistence layer is real (`control_plane/db.py`/`models.py`/`repositories.py`, migrated via `alembic/`), and so is the async submission/cancellation path the spec describes (§24): `POST /v1/runs` persists `ACCEPTED` and returns immediately; `reconciler/service.py` picks it up, resolves the environment from the database, submits to the real execution provider, and (on `DELETE /v1/runs/{id}`) cancels it. `plane` (the CLI) is a pure REST client — no direct provider access. Both execution providers support JVM JAR artifacts (`mainClass`/`jars` on Kubernetes, `SparkJarTask` on Databricks) alongside Python wheels, and both run real capability matching (spec §20-21) — `plane workload validate --environment` fails fast on an incompatible workload before any submission is attempted. `GET /metrics` (API) and `:9091/metrics` (reconciler) expose OpenTelemetry-instrumented Prometheus metrics (spec §29). `make dev` (spec §45, `scripts/dev-up.sh`) stands up kind + PostgreSQL + MinIO + the Spark Operator + the control plane from a blank machine, idempotently, with zero cloud accounts.
 
-All of this has been run live end-to-end on the remote Kubernetes cluster: `plane run` → `POST /v1/runs` → reconciler → real SparkApplication → `SUCCEEDED`, with verified-correct output in S3, and (separately, with the base image's bundled `spark-examples.jar`) a real JVM main class executing via the `mainClass`/`jars` translation; `plane cancel` against a genuinely `RunningHealthy` SparkApplication → reconciler → the resource actually deleted from the cluster → `CANCELED`; a GPU-requiring workload failing `plane workload validate --environment` with a clear capability-mismatch message before submission; and both `/metrics` endpoints showing real, non-zero data (histograms with actual timings, run counts, a live reconciliation-lag gauge) after a real run. `make dev` automation is the last v0.1 backlog item — see the [v0.1 milestone](../../milestones).
+All of this has been run live end-to-end on the remote Kubernetes cluster: `plane run` → `POST /v1/runs` → reconciler → real SparkApplication → `SUCCEEDED`, with verified-correct output in S3, and (separately, with the base image's bundled `spark-examples.jar`) a real JVM main class executing via the `mainClass`/`jars` translation; `plane cancel` against a genuinely `RunningHealthy` SparkApplication → reconciler → the resource actually deleted from the cluster → `CANCELED`; a GPU-requiring workload failing `plane workload validate --environment` with a clear capability-mismatch message before submission; both `/metrics` endpoints showing real, non-zero data after a real run; and — the spec §45 acceptance test itself — `make dev` run twice in a row (proving idempotency) from a completely blank cluster, followed by `plane run examples/wordcount.yaml --environment local` reaching `SUCCEEDED` with verified output in the freshly-provisioned MinIO, then `make dev-down` cleanly tearing down only what it created. See the [v1.0 milestone](../../milestones) for what's next.
 
 ## Repository layout
 
@@ -71,12 +71,19 @@ All of this has been run live end-to-end on the remote Kubernetes cluster: `plan
 ## Development
 
 ```
-make dev    # install the package in editable mode with dev dependencies
-make test   # run the unit test suite
-make lint   # ruff + pyright
+make dev       # stand up kind + PostgreSQL + MinIO + Spark Operator + the control plane
+make dev-down  # tear it back down
+make test      # run the unit test suite
+make lint      # ruff + pyright
 ```
 
-`make dev` does not yet stand up the full local stack (kind, PostgreSQL, MinIO, Spark Operator) described in the spec — that's tracked as a Phase 0 backlog item.
+`make dev` (spec §45, `scripts/dev-up.sh`) requires Docker, `kind`, `helm`, and `kubectl` on `PATH`; every other dependency (PostgreSQL, MinIO, the Spark Operator) is provisioned inside a local `kind` cluster, so no cloud account is needed. It's idempotent — safe to re-run after a partial failure. Once it finishes:
+
+```
+PORTAGE_API_URL=http://127.0.0.1:8124 plane run examples/wordcount.yaml --environment local
+```
+
+should succeed. On Linux, if `kind create cluster` fails with `could not find a log line that matches ...Multi-User System...`, raise `fs.inotify.max_user_instances` (kind's own [known issue](https://kind.sigs.k8s.io/docs/user/known-issues/#pod-errors-due-to-too-many-open-files)) — `scripts/dev-up.sh` checks for this and prints the fix if it looks too low.
 
 ## License and governance
 
