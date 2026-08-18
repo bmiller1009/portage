@@ -83,6 +83,26 @@ class DatasetBinding(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class ArtifactBinding(Base):
+    """Artifact repository binding (spec §51) — logical (name, version)
+    resolving to a per-environment physical URI, the same shape of
+    problem as DatasetBinding above but versioned like
+    WorkloadDefinition, since an artifact is a versioned build output."""
+
+    __tablename__ = "artifact_bindings"
+    __table_args__ = (UniqueConstraint("artifact_name", "artifact_version", "environment_name"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    artifact_name: Mapped[str] = mapped_column(String(255), index=True)
+    artifact_version: Mapped[str] = mapped_column(String(64))
+    environment_name: Mapped[str] = mapped_column(
+        ForeignKey("environments.name", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(32), default="path")
+    uri: Mapped[str] = mapped_column(String(2048))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class WorkloadDefinition(Base):
     __tablename__ = "workload_definitions"
     __table_args__ = (UniqueConstraint("name", "version"),)

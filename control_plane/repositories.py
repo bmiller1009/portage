@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control_plane.models import (
+    ArtifactBinding,
     DatasetBinding,
     Environment,
     ExecutionProfile,
@@ -226,6 +227,96 @@ async def list_dataset_bindings(
     if dataset_name is not None:
         query = query.where(DatasetBinding.dataset_name == dataset_name)
     result = await session.execute(query.order_by(DatasetBinding.dataset_name, DatasetBinding.environment_name))
+    return list(result.scalars().all())
+
+
+# --- ArtifactBinding ---------------------------------------------------
+
+
+async def create_artifact_binding(
+    session: AsyncSession,
+    *,
+    artifact_name: str,
+    artifact_version: str,
+    environment_name: str,
+    kind: str,
+    uri: str,
+) -> ArtifactBinding:
+    await get_environment(session, environment_name)
+    existing = await get_artifact_binding(
+        session, artifact_name, artifact_version, environment_name, required=False
+    )
+    if existing is not None:
+        raise AlreadyExistsError(
+            f"artifact '{artifact_name}/{artifact_version}' already has a binding for "
+            f"environment '{environment_name}'"
+        )
+    binding = ArtifactBinding(
+        artifact_name=artifact_name,
+        artifact_version=artifact_version,
+        environment_name=environment_name,
+        kind=kind,
+        uri=uri,
+    )
+    session.add(binding)
+    await session.commit()
+    await session.refresh(binding)
+    return binding
+
+
+@overload
+async def get_artifact_binding(
+    session: AsyncSession,
+    artifact_name: str,
+    artifact_version: str,
+    environment_name: str,
+    *,
+    required: Literal[True] = True,
+) -> ArtifactBinding: ...
+@overload
+async def get_artifact_binding(
+    session: AsyncSession,
+    artifact_name: str,
+    artifact_version: str,
+    environment_name: str,
+    *,
+    required: Literal[False],
+) -> ArtifactBinding | None: ...
+async def get_artifact_binding(
+    session: AsyncSession,
+    artifact_name: str,
+    artifact_version: str,
+    environment_name: str,
+    *,
+    required: bool = True,
+) -> ArtifactBinding | None:
+    result = await session.execute(
+        select(ArtifactBinding).where(
+            ArtifactBinding.artifact_name == artifact_name,
+            ArtifactBinding.artifact_version == artifact_version,
+            ArtifactBinding.environment_name == environment_name,
+        )
+    )
+    binding = result.scalar_one_or_none()
+    if binding is None and required:
+        raise NotFoundError(
+            f"no binding for artifact '{artifact_name}/{artifact_version}' in "
+            f"environment '{environment_name}'"
+        )
+    return binding
+
+
+async def list_artifact_bindings(
+    session: AsyncSession, *, artifact_name: str | None = None
+) -> list[ArtifactBinding]:
+    query = select(ArtifactBinding)
+    if artifact_name is not None:
+        query = query.where(ArtifactBinding.artifact_name == artifact_name)
+    result = await session.execute(
+        query.order_by(
+            ArtifactBinding.artifact_name, ArtifactBinding.artifact_version, ArtifactBinding.environment_name
+        )
+    )
     return list(result.scalars().all())
 
 

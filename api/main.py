@@ -18,6 +18,7 @@ from fastapi import FastAPI, Request, Response
 from prometheus_client import CONTENT_TYPE_LATEST
 
 from api.routers import (
+    artifacts,
     datasets,
     environments,
     execution_profiles,
@@ -34,6 +35,7 @@ app.include_router(execution_profiles.router)
 app.include_router(storage_profiles.router)
 app.include_router(environments.router)
 app.include_router(datasets.router)
+app.include_router(artifacts.router)
 app.include_router(workloads.router)
 app.include_router(runs.router)
 app.include_router(validate.router)

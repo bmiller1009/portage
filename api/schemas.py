@@ -75,6 +75,24 @@ class DatasetBindingOut(BaseModel):
     uri: str
 
 
+class ArtifactBindingCreate(BaseModel):
+    artifact_name: str
+    artifact_version: str
+    environment_name: str
+    kind: str = "path"
+    uri: str
+
+
+class ArtifactBindingOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    artifact_name: str
+    artifact_version: str
+    environment_name: str
+    kind: str
+    uri: str
+
+
 class WorkloadDefinitionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -59,6 +59,19 @@ async def _seed_dataset_bindings(session, environment_name: str) -> None:
             kind="path",
             uri=f"s3a://bucket/{dataset_name}",
         )
+    # examples/wordcount.yaml's application.artifact is the fixed literal
+    # "artifact://wordcount/0.1.0" regardless of what unique workload NAME
+    # workload_ref registers it under — submit_new_runs() now resolves
+    # this through ArtifactBinding, so tests expecting a successful
+    # submission need one seeded, same as the dataset bindings above.
+    await repositories.create_artifact_binding(
+        session,
+        artifact_name="wordcount",
+        artifact_version="0.1.0",
+        environment_name=environment_name,
+        kind="path",
+        uri="s3a://bucket/artifacts/wordcount-0.1.0.whl",
+    )
 
 
 def _metric_sample_count(name: str) -> float:

@@ -15,6 +15,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from control_plane import metrics, provider_factory, repositories, run_service
 from control_plane.execution_provider import ResolvedWorkload, RunRequest
 from control_plane.run_state import TERMINAL_STATES, RunState
+from spec.artifact.v1alpha1 import (
+    Artifact,
+    ArtifactMetadata,
+    ArtifactPathBinding,
+    parse_artifact_reference,
+    resolve_artifact_uri,
+)
 from spec.dataset.v1alpha1 import Dataset, DatasetMetadata, PathBinding, resolve_dataset_config
 from spec.workload.v1alpha1 import SparkWorkload
 
@@ -57,6 +64,39 @@ async def _resolve_dataset_config(
     return resolve_dataset_config(workload, datasets, environment_name)
 
 
+async def _resolve_artifact(
+    session: AsyncSession, workload: SparkWorkload, environment_name: str
+) -> SparkWorkload:
+    """Resolves an artifact:// reference (spec §51) through the persisted
+    ArtifactBinding table, returning a copy of the workload with
+    application.artifact replaced by the resolved, environment-specific
+    URI — providers keep reading workload.application.artifact exactly as
+    before, they just now get a real URI instead of a logical reference.
+    A non-artifact:// value (e.g. a local:// path baked into an image,
+    like examples/wordcount-jar.yaml's) passes through unchanged — the
+    abstraction is opt-in, not mandatory."""
+    reference = workload.application.artifact
+    if not reference.startswith("artifact://"):
+        return workload
+
+    name, version = parse_artifact_reference(reference)
+    binding_row = await repositories.get_artifact_binding(
+        session, name, version, environment_name, required=False
+    )
+    artifact = Artifact(
+        apiVersion="runtime/v1alpha1",
+        kind="Artifact",
+        metadata=ArtifactMetadata(name=name, version=version),
+        bindings=(
+            {environment_name: ArtifactPathBinding(uri=binding_row.uri)} if binding_row is not None else {}
+        ),
+    )
+    resolved_uri = resolve_artifact_uri(reference, artifact, environment_name)
+    return workload.model_copy(
+        update={"application": workload.application.model_copy(update={"artifact": resolved_uri})}
+    )
+
+
 async def submit_new_runs(session: AsyncSession) -> None:
     for run in await repositories.list_runs_by_state(session, [RunState.ACCEPTED.value]):
         try:
@@ -64,6 +104,7 @@ async def submit_new_runs(session: AsyncSession) -> None:
                 session, run.workload_name, version=run.workload_version
             )
             workload = SparkWorkload.model_validate(workload_row.definition)
+            workload = await _resolve_artifact(session, workload, run.environment_name)
             environment = await repositories.get_environment(session, run.environment_name)
             execution_profile = await repositories.get_execution_profile(
                 session, environment.execution_profile_name
