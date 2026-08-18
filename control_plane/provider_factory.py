@@ -5,8 +5,6 @@ control_plane/run_service.py (cancel/logs), the only two callers that ever
 turn persisted config into a live provider.
 """
 
-from typing import cast
-
 from control_plane.credentials import (
     resolve_adls_credentials,
     resolve_s3_credentials,
@@ -15,11 +13,7 @@ from control_plane.credentials import (
 from control_plane.execution_provider import ExecutionProvider
 from control_plane.models import ExecutionProfile, StorageProfile
 from control_plane.storage_provider import StorageProvider
-from providers.execution.databricks.provider import (
-    DatabricksExecutionProvider,
-    DatabricksProfile,
-    WorkspaceClientLike,
-)
+from providers.execution.databricks.provider import DatabricksExecutionProvider, DatabricksProfile
 from providers.execution.kubernetes.provider import KubernetesExecutionProvider, KubernetesProfile
 from providers.storage.adls.provider import AdlsConnectionProfile, AdlsStorageProvider
 from providers.storage.s3.provider import S3ConnectionProfile, S3StorageProvider
@@ -50,15 +44,21 @@ def build_execution_provider(execution_profile: ExecutionProfile) -> ExecutionPr
         return KubernetesExecutionProvider(profile)
 
     if execution_profile.provider == "databricks":
-        from databricks.sdk import WorkspaceClient
-
         profile = DatabricksProfile(
             host=config["host"],
             cluster_node_type_id=config["cluster_node_type_id"],
             num_workers=config.get("num_workers", 1),
             runtime_profiles=config.get("runtimeProfiles", {}),
+            credential_reference=config.get("credential_reference", {}),
         )
-        return DatabricksExecutionProvider(profile, client=cast(WorkspaceClientLike, WorkspaceClient()))
+        # No client constructed here — DatabricksExecutionProvider builds
+        # a real WorkspaceClient lazily, only when submit/status/cancel is
+        # actually called (see its _get_client()). Building one eagerly
+        # here used to mean plane workload validate against *any*
+        # Databricks-provider environment crashed with an unrelated SDK
+        # auth error whenever no Databricks credentials were configured,
+        # even though validate() never touches a client at all.
+        return DatabricksExecutionProvider(profile)
 
     raise UnsupportedProviderError(f"unsupported execution provider: {execution_profile.provider}")
 

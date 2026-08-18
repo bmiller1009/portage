@@ -135,6 +135,55 @@ def test_validate_accepts_jvm_jar(profile, resolved_jar_run):
     result = asyncio.run(provider.validate(resolved_jar_run.resolved))
 
     assert result.valid is True
+    # Regression: validate() must never touch a client, so a profile with
+    # no credential_reference configured is still fully usable for it.
+    assert provider._client is None
+
+
+def test_get_client_constructs_workspace_client_via_oauth_m2m(monkeypatch):
+    import databricks.sdk as databricks_sdk_module
+
+    captured = {}
+
+    class FakeWorkspaceClient:
+        def __init__(self, *, host, client_id, client_secret):
+            captured["host"] = host
+            captured["client_id"] = client_id
+            captured["client_secret"] = client_secret
+
+    monkeypatch.setattr(databricks_sdk_module, "WorkspaceClient", FakeWorkspaceClient)
+    monkeypatch.setenv("PORTAGE_DBX_CLIENT_ID", "app-id-123")
+    monkeypatch.setenv("PORTAGE_DBX_CLIENT_SECRET", "app-secret-456")
+
+    dbx_profile = DatabricksProfile(
+        host="https://example.databricks.com",
+        cluster_node_type_id="i3.xlarge",
+        credential_reference={"provider": "env", "reference": "PORTAGE_DBX"},
+    )
+    provider = DatabricksExecutionProvider(dbx_profile)
+
+    client = provider._get_client()
+
+    assert captured == {
+        "host": "https://example.databricks.com",
+        "client_id": "app-id-123",
+        "client_secret": "app-secret-456",
+    }
+    assert provider._get_client() is client  # cached, constructed only once
+
+
+def test_get_client_missing_credentials_raises():
+    from control_plane.credentials import CredentialResolutionError
+
+    dbx_profile = DatabricksProfile(
+        host="https://example.databricks.com",
+        cluster_node_type_id="i3.xlarge",
+        credential_reference={"provider": "env", "reference": "PORTAGE_DBX_MISSING"},
+    )
+    provider = DatabricksExecutionProvider(dbx_profile)
+
+    with pytest.raises(CredentialResolutionError):
+        provider._get_client()
 
 
 def test_submit_calls_jobs_submit_and_returns_provider_run(profile, resolved_run):

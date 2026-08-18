@@ -16,14 +16,23 @@ the same artifact is invocable by both providers (see examples/wordcount_app/
 pyproject.toml and providers/execution/kubernetes/provider.py's launcher).
 The jar task's entryPoint is used directly as `main_class_name` — no
 splitting needed, since a JVM main class isn't a console_scripts entry point.
+
+Client construction is lazy (see _get_client()): validate() and
+build_run_submission() are pure translation and never touch a live client,
+so a Databricks-provider environment can be statically validated with zero
+Databricks credentials configured anywhere. Only submit()/status()/cancel()
+construct a real WorkspaceClient, via OAuth M2M (spec §66) using
+credentials resolved through control_plane.credentials at that point, not
+at provider-construction time.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from databricks.sdk.service import compute as dbx_compute
 from databricks.sdk.service import jobs as dbx_jobs
 
+from control_plane.credentials import resolve_databricks_credentials
 from control_plane.execution_provider import (
     CapabilitySet,
     LogReference,
@@ -98,6 +107,11 @@ class DatabricksProfile:
     # environment-scoped rather than a global registry — e.g.
     # {"high-memory": {"node_type_id": "r5.4xlarge"}}.
     runtime_profiles: dict[str, dict] = field(default_factory=dict)
+    # {"provider": "env", "reference": "PORTAGE_DATABRICKS"} (spec §35) —
+    # resolved lazily by _get_client(), never at profile-construction time,
+    # so a profile with no real credentials configured anywhere is still
+    # valid for translation-only use (validate(), build_run_submission()).
+    credential_reference: dict = field(default_factory=dict)
 
 
 def _split_entry_point(entry_point: str) -> tuple[str, str]:
@@ -114,9 +128,26 @@ class DatabricksExecutionProvider:
         self.profile = profile
         # Testing seam — unit tests inject a fake client so no live
         # workspace/network call is ever made (ADR: mocked-only for Phase 0).
-        # None is only valid for translation-only use (build_run_submission);
-        # submit/status/cancel require a real client and assert accordingly.
+        # None means "construct a real one lazily, on first actual need" —
+        # see _get_client(). validate()/build_run_submission() never call
+        # it, so translation-only use never requires credentials at all.
         self._client = client
+
+    def _get_client(self) -> WorkspaceClientLike:
+        if self._client is not None:
+            return self._client
+        from databricks.sdk import WorkspaceClient
+
+        credentials = resolve_databricks_credentials(self.profile.credential_reference)
+        self._client = cast(
+            WorkspaceClientLike,
+            WorkspaceClient(
+                host=self.profile.host,
+                client_id=credentials.client_id,
+                client_secret=credentials.client_secret,
+            ),
+        )
+        return self._client
 
     async def validate(self, workload) -> ValidationResult:
         errors = match_capabilities(workload.workload, await self.capabilities())
@@ -172,16 +203,14 @@ class DatabricksExecutionProvider:
         )
 
     async def submit(self, run: RunRequest) -> ProviderRun:
-        assert self._client is not None, "DatabricksExecutionProvider needs a client to submit"
         task = self.build_run_submission(run)
-        result = self._client.jobs.submit(
+        result = self._get_client().jobs.submit(
             run_name=f"{run.resolved.workload.metadata.name}-{run.run_id}", tasks=[task]
         )
         return ProviderRun(provider_run_id=str(result.run_id))
 
     async def status(self, provider_run_id: str) -> ProviderStatus:
-        assert self._client is not None, "DatabricksExecutionProvider needs a client to poll status"
-        run = self._client.jobs.get_run(run_id=int(provider_run_id))
+        run = self._get_client().jobs.get_run(run_id=int(provider_run_id))
         state = run.state
         if state is None:
             return ProviderStatus(state=RunState.UNKNOWN, provider_native_status="UNREPORTED")
@@ -199,8 +228,7 @@ class DatabricksExecutionProvider:
         return ProviderStatus(state=canonical, provider_native_status=native)
 
     async def cancel(self, provider_run_id: str) -> None:
-        assert self._client is not None, "DatabricksExecutionProvider needs a client to cancel"
-        self._client.jobs.cancel_run(run_id=int(provider_run_id))
+        self._get_client().jobs.cancel_run(run_id=int(provider_run_id))
 
     async def logs(self, provider_run_id: str) -> LogReference:
         return LogReference(

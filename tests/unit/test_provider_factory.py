@@ -1,7 +1,11 @@
 """Pure translation-logic tests — no database, no live cluster/workspace.
-Real client construction (kubeconfig loading, WorkspaceClient auth) is
-monkeypatched out so this stays fast; the actual K8s translation shape is
-already covered by tests/unit/test_kubernetes_provider.py."""
+Kubernetes's real client construction (kubeconfig loading) is monkeypatched
+out so this stays fast; Databricks needs no such monkeypatching since
+build_execution_provider() never constructs a live WorkspaceClient — that
+now happens lazily inside the provider itself, only on submit/status/cancel
+(see providers/execution/databricks/provider.py's _get_client()). The
+actual K8s translation shape is already covered by
+tests/unit/test_kubernetes_provider.py."""
 
 import pytest
 
@@ -59,11 +63,13 @@ def test_build_execution_provider_kubernetes_passes_through_runtime_profiles(mon
     }
 
 
-def test_build_execution_provider_databricks(monkeypatch):
-    import databricks.sdk as databricks_sdk_module
-
-    monkeypatch.setattr(databricks_sdk_module, "WorkspaceClient", lambda: object())
-
+def test_build_execution_provider_databricks_does_not_construct_a_client():
+    """Regression test: build_execution_provider() used to eagerly
+    construct a real WorkspaceClient(), which raises at construction time
+    whenever no Databricks credentials are configured — crashing even a
+    translation-only caller like `plane workload validate`. No monkeypatch
+    of databricks.sdk is needed here specifically because that no longer
+    happens: if it did, this test would fail with a real auth error."""
     profile = ExecutionProfile(
         name="dbx",
         provider="databricks",
@@ -74,6 +80,27 @@ def test_build_execution_provider_databricks(monkeypatch):
 
     assert isinstance(provider, DatabricksExecutionProvider)
     assert provider.profile.host == "https://example.databricks.com"
+    assert provider._client is None
+
+
+def test_build_execution_provider_databricks_passes_through_credential_reference():
+    profile = ExecutionProfile(
+        name="dbx",
+        provider="databricks",
+        config={
+            "host": "https://example.databricks.com",
+            "cluster_node_type_id": "i3.xlarge",
+            "credential_reference": {"provider": "env", "reference": "PORTAGE_DATABRICKS"},
+        },
+    )
+
+    provider = build_execution_provider(profile)
+
+    assert isinstance(provider, DatabricksExecutionProvider)
+    assert provider.profile.credential_reference == {
+        "provider": "env",
+        "reference": "PORTAGE_DATABRICKS",
+    }
 
 
 def test_build_execution_provider_unsupported():

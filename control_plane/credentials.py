@@ -14,6 +14,14 @@ class CredentialResolutionError(Exception):
 
 
 @dataclass
+class DatabricksCredentials:
+    # OAuth M2M (spec §66) — Databricks' unified-auth SDK takes these
+    # directly as WorkspaceClient(host=..., client_id=..., client_secret=...).
+    client_id: str
+    client_secret: str
+
+
+@dataclass
 class AdlsCredentials:
     # None means "use workload identity" (spec §50: preferred over static
     # storage keys) rather than a static account key — ADLS's credential
@@ -53,6 +61,35 @@ def resolve_vast_credentials(credential_reference: dict) -> tuple[str, str]:
     """VAST S3 mode uses the same key-pair auth model as S3 (spec §48) —
     same env-var-suffix convention as resolve_s3_credentials()."""
     return _resolve_env_key_pair(credential_reference)
+
+
+def resolve_databricks_credentials(credential_reference: dict) -> DatabricksCredentials:
+    """{"provider": "env", "reference": "PORTAGE_DATABRICKS"} ->
+    DatabricksCredentials(os.environ["PORTAGE_DATABRICKS_CLIENT_ID"],
+    os.environ["PORTAGE_DATABRICKS_CLIENT_SECRET"]) — OAuth M2M's client
+    ID/secret pair isn't a key pair in the S3 sense, but the same
+    provider/reference/env-var-suffix convention still applies, so this
+    doesn't reuse _resolve_env_key_pair() (different suffixes) but mirrors
+    its shape."""
+    provider = credential_reference.get("provider")
+    if provider != "env":
+        raise CredentialResolutionError(f"unsupported credential provider: {provider}")
+
+    reference = credential_reference.get("reference")
+    if not reference:
+        raise CredentialResolutionError("credential_reference is missing 'reference'")
+
+    client_id_var = f"{reference}_CLIENT_ID"
+    client_secret_var = f"{reference}_CLIENT_SECRET"
+    try:
+        return DatabricksCredentials(
+            client_id=os.environ[client_id_var], client_secret=os.environ[client_secret_var]
+        )
+    except KeyError as e:
+        raise CredentialResolutionError(
+            f"credential reference '{reference}' requires {client_id_var} and "
+            f"{client_secret_var} to be set in the reconciler's environment"
+        ) from e
 
 
 def resolve_adls_credentials(credential_reference: dict) -> AdlsCredentials:
