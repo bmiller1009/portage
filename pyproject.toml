@@ -24,6 +24,11 @@ dependencies = [
     "asyncpg>=0.30",
     "alembic>=1.13",
     "httpx>=0.27",
+    # Semantic result comparison (spec §22, §67): reads Parquet output
+    # directly via pyarrow's S3 filesystem — no PySpark/JVM needed for a
+    # read-only comparison, and pyspark is intentionally not a portage
+    # dependency (see examples/wordcount_app's own pyproject.toml).
+    "pyarrow>=17.0",
     # OIDC (spec §33-34, §67): JWT verification against a JWKS endpoint —
     # RS256 needs the cryptography backend, since real IdPs (Entra/Okta/
     # Ping) never issue HS256 (symmetric-key) tokens for a public JWKS flow.
