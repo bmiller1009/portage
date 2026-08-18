@@ -1,0 +1,52 @@
+# Apache Iceberg REST Catalog (docs/architecture/spec.md §11/§68), in-cluster,
+# namespace portage-storage — shares the namespace with MinIO since the
+# catalog's warehouse lives in that same MinIO instance. Defaults to an
+# in-memory SQLite JdbcCatalog (CATALOG_URI unset) — fine for a dev/demo
+# deployment, matches MinIO's own equally-ephemeral dev data.
+# Credentials here are the same dev-only MinIO credentials already
+# committed in deploy/dev/minio.yaml — never used outside this local
+# cluster.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: iceberg-rest
+  namespace: portage-storage
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: iceberg-rest
+  template:
+    metadata:
+      labels:
+        app: iceberg-rest
+    spec:
+      containers:
+        - name: iceberg-rest
+          image: apache/iceberg-rest-fixture:1.10.1
+          env:
+            - name: CATALOG_WAREHOUSE
+              value: s3://portage-local/iceberg-warehouse
+            - name: CATALOG_S3__ENDPOINT
+              value: http://minio.portage-storage.svc.cluster.local:9000
+            - name: CATALOG_S3__ACCESS__KEY__ID
+              value: portage-dev
+            - name: CATALOG_S3__SECRET__ACCESS__KEY
+              value: portage-dev-secret
+            - name: CATALOG_S3__PATH__STYLE__ACCESS
+              value: "true"
+          ports:
+            - containerPort: 8181
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: iceberg-rest
+  namespace: portage-storage
+spec:
+  selector:
+    app: iceberg-rest
+  ports:
+    - name: api
+      port: 8181
+      targetPort: 8181

@@ -95,6 +95,11 @@ else
         sh -c 'cat > /tmp/input.txt && mc cp /tmp/input.txt local/portage-local/wordcount/input.txt' >/dev/null
 fi
 
+# --- 4b. Iceberg REST Catalog --------------------------------------------------
+log "Iceberg REST Catalog"
+kubectl --context "$KUBE_CONTEXT" apply -f deploy/dev/iceberg-rest.yaml
+kubectl --context "$KUBE_CONTEXT" -n portage-storage rollout status deployment/iceberg-rest --timeout=120s
+
 # --- 5. PostgreSQL --------------------------------------------------------------
 log "PostgreSQL ($POSTGRES_CONTAINER on :$POSTGRES_PORT)"
 if docker ps --format '{{.Names}}' | grep -qx "$POSTGRES_CONTAINER"; then
