@@ -193,3 +193,18 @@ class ConformanceReportOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     results: list[ConformancePairResultOut]
+
+
+class CertificationRowOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    execution_provider: str
+    storage_protocol: str
+    status: str
+    detail: str | None
+
+
+class CertificationReportOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    rows: list[CertificationRowOut]

@@ -220,6 +220,34 @@ def conformance_test(
         raise typer.Exit(code=1)
 
 
+@conformance_app.command("report")
+def conformance_report() -> None:
+    """Provider certification report (spec §78) — every registered
+    execution+storage combination, PASS/FAIL/BLOCKED, in the format
+    spec §78 itself shows. BLOCKED rows are an honest "never live-
+    verified" (e.g. Databricks, ADLS, VAST NFS — see issues #8/#27/#28),
+    not a fabricated PASS. Exits 1 if any row is FAIL (a real, current
+    defect); BLOCKED rows don't affect the exit code."""
+    base_url = _api_base_url()
+    resp = httpx.get(f"{base_url}/v1/conformance/report")
+    resp.raise_for_status()
+    report = resp.json()
+
+    typer.echo("Portable Runtime Conformance")
+    typer.echo()
+    any_failed = False
+    for row in report["rows"]:
+        label = f"{row['execution_provider']} + {row['storage_protocol']}"
+        typer.echo(f"{label:<40}{row['status']}")
+        if row["status"] == "FAIL":
+            any_failed = True
+            if row["detail"]:
+                typer.echo(f"  {row['detail']}")
+
+    if any_failed:
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def status(run_id: str) -> None:
     """Show current run status and its event history."""
