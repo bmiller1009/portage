@@ -392,6 +392,6 @@ async def test_retryable_submission_error_fails_after_max_attempts(
     run = await run_service.get_run(session, run.id)
     assert run.state == RunState.FAILED.value
     assert run.submission_attempts == reconciler_service.MAX_SUBMISSION_ATTEMPTS
-    assert "exceeded max submission attempts" in (await run_service.list_run_events(session, run.id))[
-        -1
-    ].message
+    last_event = (await run_service.list_run_events(session, run.id))[-1]
+    assert last_event.message is not None
+    assert "exceeded max submission attempts" in last_event.message
