@@ -89,6 +89,36 @@ def test_build_storage_config_missing_credentials_raises(monkeypatch):
 
 
 def test_build_storage_config_unsupported():
-    profile = StorageProfile(name="x", provider="vast", config={}, credential_reference={})
+    profile = StorageProfile(name="x", provider="not-a-real-provider", config={}, credential_reference={})
     with pytest.raises(UnsupportedProviderError):
+        build_storage_config(profile)
+
+
+def test_build_storage_config_vast_s3_mode(monkeypatch):
+    monkeypatch.setenv("PORTAGE_TEST_ACCESS_KEY", "AKIA123")
+    monkeypatch.setenv("PORTAGE_TEST_SECRET_KEY", "supersecret")
+    profile = StorageProfile(
+        name="vast-prod",
+        provider="vast",
+        config={"protocol": "s3", "endpoint_url": "http://vast.local:9000"},
+        credential_reference={"provider": "env", "reference": "PORTAGE_TEST"},
+    )
+
+    config = build_storage_config(profile)
+
+    assert config["spark.hadoop.fs.s3a.access.key"] == "AKIA123"
+    assert config["spark.hadoop.fs.s3a.endpoint"] == "http://vast.local:9000"
+
+
+def test_build_storage_config_vast_nfs_mode_not_yet_implemented():
+    profile = StorageProfile(
+        name="vast-nfs", provider="vast", config={"protocol": "nfs"}, credential_reference={}
+    )
+    with pytest.raises(UnsupportedProviderError, match="NFS"):
+        build_storage_config(profile)
+
+
+def test_build_storage_config_vast_missing_protocol():
+    profile = StorageProfile(name="vast-bad", provider="vast", config={}, credential_reference={})
+    with pytest.raises(UnsupportedProviderError, match="protocol"):
         build_storage_config(profile)

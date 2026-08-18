@@ -7,7 +7,7 @@ turn persisted config into a live provider.
 
 from typing import cast
 
-from control_plane.credentials import resolve_s3_credentials
+from control_plane.credentials import resolve_s3_credentials, resolve_vast_credentials
 from control_plane.execution_provider import ExecutionProvider
 from control_plane.models import ExecutionProfile, StorageProfile
 from providers.execution.databricks.provider import (
@@ -17,6 +17,7 @@ from providers.execution.databricks.provider import (
 )
 from providers.execution.kubernetes.provider import KubernetesExecutionProvider, KubernetesProfile
 from providers.storage.s3.provider import S3ConnectionProfile, S3StorageProvider
+from providers.storage.vast.provider import VastS3ConnectionProfile, VastS3StorageProvider
 
 
 class UnsupportedProviderError(Exception):
@@ -61,5 +62,22 @@ def build_storage_config(storage_profile: StorageProfile) -> dict[str, str]:
             path_style_access=config.get("path_style_access", True),
         )
         return S3StorageProvider(profile).spark_config()
+
+    if storage_profile.provider == "vast":
+        config = storage_profile.config
+        protocol = config.get("protocol")
+        if protocol == "s3":
+            access_key, secret_key = resolve_vast_credentials(storage_profile.credential_reference)
+            vast_profile = VastS3ConnectionProfile(
+                access_key=access_key,
+                secret_key=secret_key,
+                endpoint_url=config["endpoint_url"],
+                region=config.get("region", "us-east-1"),
+                path_style_access=config.get("path_style_access", True),
+            )
+            return VastS3StorageProvider(vast_profile).spark_config()
+        if protocol == "nfs":
+            raise UnsupportedProviderError("VAST NFS mode is not yet implemented")
+        raise UnsupportedProviderError(f"VAST storage profile missing/invalid 'protocol': {protocol!r}")
 
     raise UnsupportedProviderError(f"unsupported storage provider: {storage_profile.provider}")
