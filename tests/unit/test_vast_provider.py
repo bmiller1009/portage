@@ -4,9 +4,15 @@ underlying S3 logic (URI validation, spark_config shape, health checks) is
 already covered by tests/unit/test_s3_provider.py."""
 
 import boto3
+import pytest
 from moto import mock_aws
 
-from providers.storage.vast.provider import VastS3ConnectionProfile, VastS3StorageProvider
+from providers.storage.vast.provider import (
+    VastNfsConnectionProfile,
+    VastNfsStorageProvider,
+    VastS3ConnectionProfile,
+    VastS3StorageProvider,
+)
 
 
 def _profile() -> VastS3ConnectionProfile:
@@ -44,3 +50,49 @@ def test_capabilities_reports_vast_s3_protocol():
     assert caps.protocol == "vast-s3"
     assert caps.path_bindings is True
     assert caps.table_bindings is False
+
+
+def test_vast_s3_reports_no_volume_mounts():
+    assert VastS3StorageProvider(_profile()).volume_mounts() is None
+
+
+def _nfs_profile() -> VastNfsConnectionProfile:
+    return VastNfsConnectionProfile(mount_path="/vast", server="vast.example.com", export_path="/export/portage")
+
+
+def test_nfs_resolve_uri_accepts_paths_under_mount():
+    provider = VastNfsStorageProvider(_nfs_profile())
+    assert provider.resolve_uri("/vast/claims/raw") == "/vast/claims/raw"
+
+
+def test_nfs_resolve_uri_rejects_paths_outside_mount():
+    provider = VastNfsStorageProvider(_nfs_profile())
+    with pytest.raises(ValueError, match="cannot resolve URI outside"):
+        provider.resolve_uri("s3a://bucket/key")
+
+
+def test_nfs_spark_config_is_empty():
+    # Nothing NFS-specific is expressible as sparkConf — see volume_mounts().
+    assert VastNfsStorageProvider(_nfs_profile()).spark_config() == {}
+
+
+def test_nfs_health_check_always_false():
+    # No real VAST NFS server is reachable from this project — honest
+    # False rather than faking a positive result.
+    assert VastNfsStorageProvider(_nfs_profile()).health_check() is False
+
+
+def test_nfs_capabilities_reports_vast_nfs_protocol():
+    caps = VastNfsStorageProvider(_nfs_profile()).capabilities()
+    assert caps.protocol == "vast-nfs"
+
+
+def test_nfs_volume_mounts_shape():
+    mounts = VastNfsStorageProvider(_nfs_profile()).volume_mounts()
+    assert mounts == [
+        {
+            "name": "vast-nfs-data",
+            "volume": {"nfs": {"server": "vast.example.com", "path": "/export/portage"}},
+            "mount_path": "/vast",
+        }
+    ]

@@ -23,6 +23,8 @@ For JVM (`jvm-jar`), the CRD *does* expose `mainClass` and `jars` (both plain st
 
 **Bug found via this live run, fixed**: `KubernetesExecutionProvider.logs()` had been generating `kubectl logs -l spark.apache.org/app-name=...` — the wrong label. The operator actually labels driver pods `spark.operator/spark-app-name=<run-name>` (confirmed via `kubectl get pod --show-labels` against a real running driver), not `spark.apache.org/app-name`. The old label silently matched zero pods.
 
+For driver/executor pod customization (e.g. VAST NFS volume mounts, issue #28): `driverSpec`/`executorSpec` expose exactly one field, `podTemplateSpec` — a full Kubernetes `PodTemplateSpec`, not a flat set of CRD-specific fields (confirmed live: `.spec.properties.driverSpec.properties` is `["podTemplateSpec"]`, nothing else). To add a volume mount without conflicting with the operator-managed container, target it by name: `spark-kubernetes-driver` / `spark-kubernetes-executor` (confirmed live via `kubectl get pod ... -o jsonpath='{.spec.containers[*].name}'`) — this is Spark's own upstream Kubernetes-backend container naming, not specific to this operator.
+
 ## What it took to get a real job running
 
 Three things the spec doesn't (and shouldn't have to) call out, discovered empirically:

@@ -73,6 +73,30 @@ def test_build_spark_application_shape(profile, resolved_run):
     assert spec["runtimeVersions"]["sparkVersion"] == "4.2.0"
     assert spec["sparkConf"]["spark.driver.memory"] == "2g"
     assert spec["sparkConf"]["spark.executor.memory"] == "2g"
+    assert "driverSpec" not in spec
+    assert "executorSpec" not in spec
+
+
+def test_build_spark_application_adds_volume_mounts_when_present(profile, resolved_run):
+    resolved_run.resolved.volume_mounts = [
+        {
+            "name": "vast-nfs-data",
+            "volume": {"nfs": {"server": "vast.example.com", "path": "/export/portage"}},
+            "mount_path": "/vast",
+        }
+    ]
+    provider = KubernetesExecutionProvider(profile, api_client=FakeCustomObjectsApi())
+
+    spec = provider.build_spark_application(resolved_run)["spec"]
+
+    for role, container_name in [("driverSpec", "spark-kubernetes-driver"), ("executorSpec", "spark-kubernetes-executor")]:
+        pod_spec = spec[role]["podTemplateSpec"]["spec"]
+        assert pod_spec["volumes"] == [
+            {"name": "vast-nfs-data", "nfs": {"server": "vast.example.com", "path": "/export/portage"}}
+        ]
+        container = pod_spec["containers"][0]
+        assert container["name"] == container_name
+        assert container["volumeMounts"] == [{"name": "vast-nfs-data", "mountPath": "/vast"}]
     assert (
         spec["sparkConf"]["spark.portable.dataset.wordcount.raw.uri"]
         == "s3a://portage-phase0/wordcount/input.txt"

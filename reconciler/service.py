@@ -77,6 +77,7 @@ async def submit_new_runs(session: AsyncSession) -> None:
                 dataset_config=await _resolve_dataset_config(session, workload, run.environment_name),
                 storage_config=provider_factory.build_storage_config(storage_profile),
                 environment_name=run.environment_name,
+                volume_mounts=provider_factory.build_storage_volume_mounts(storage_profile),
             )
             provider = provider_factory.build_execution_provider(execution_profile)
 

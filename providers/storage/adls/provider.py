@@ -79,3 +79,6 @@ class AdlsStorageProvider:
 
     def capabilities(self) -> StorageCapabilitySet:
         return StorageCapabilitySet(protocol="adls", path_bindings=True, table_bindings=False)
+
+    def volume_mounts(self) -> list[dict] | None:
+        return None

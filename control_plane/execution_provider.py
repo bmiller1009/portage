@@ -16,12 +16,18 @@ class ResolvedWorkload:
     """A workload plus its environment resolution: dataset config
     (portable.dataset.<name>.uri -> value, per ADR 0006) and storage
     provider config (credentials, endpoint, required jars — spec §49) kept
-    as separate fields since they come from different resolution steps."""
+    as separate fields since they come from different resolution steps.
+
+    volume_mounts is None for every storage provider except VAST NFS mode
+    (spec §48) — NFS access is Kubernetes-CSI-backed, not expressible as
+    Spark config at all, so it needs actual pod volume mounts instead. See
+    KubernetesExecutionProvider.build_spark_application()."""
 
     workload: SparkWorkload
     dataset_config: dict[str, str]
     environment_name: str
     storage_config: dict[str, str] = field(default_factory=dict)
+    volume_mounts: list[dict] | None = None
 
 
 @dataclass

@@ -74,3 +74,6 @@ class S3StorageProvider:
 
     def capabilities(self) -> StorageCapabilitySet:
         return StorageCapabilitySet(protocol="s3", path_bindings=True, table_bindings=False)
+
+    def volume_mounts(self) -> list[dict] | None:
+        return None

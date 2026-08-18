@@ -14,6 +14,7 @@ from control_plane.credentials import (
 )
 from control_plane.execution_provider import ExecutionProvider
 from control_plane.models import ExecutionProfile, StorageProfile
+from control_plane.storage_provider import StorageProvider
 from providers.execution.databricks.provider import (
     DatabricksExecutionProvider,
     DatabricksProfile,
@@ -22,7 +23,12 @@ from providers.execution.databricks.provider import (
 from providers.execution.kubernetes.provider import KubernetesExecutionProvider, KubernetesProfile
 from providers.storage.adls.provider import AdlsConnectionProfile, AdlsStorageProvider
 from providers.storage.s3.provider import S3ConnectionProfile, S3StorageProvider
-from providers.storage.vast.provider import VastS3ConnectionProfile, VastS3StorageProvider
+from providers.storage.vast.provider import (
+    VastNfsConnectionProfile,
+    VastNfsStorageProvider,
+    VastS3ConnectionProfile,
+    VastS3StorageProvider,
+)
 
 
 class UnsupportedProviderError(Exception):
@@ -55,7 +61,7 @@ def build_execution_provider(execution_profile: ExecutionProfile) -> ExecutionPr
     raise UnsupportedProviderError(f"unsupported execution provider: {execution_profile.provider}")
 
 
-def build_storage_config(storage_profile: StorageProfile) -> dict[str, str]:
+def _build_storage_provider(storage_profile: StorageProfile) -> StorageProvider:
     if storage_profile.provider == "s3":
         access_key, secret_key = resolve_s3_credentials(storage_profile.credential_reference)
         config = storage_profile.config
@@ -66,7 +72,7 @@ def build_storage_config(storage_profile: StorageProfile) -> dict[str, str]:
             region=config.get("region", "us-east-1"),
             path_style_access=config.get("path_style_access", True),
         )
-        return S3StorageProvider(profile).spark_config()
+        return S3StorageProvider(profile)
 
     if storage_profile.provider == "vast":
         config = storage_profile.config
@@ -80,9 +86,13 @@ def build_storage_config(storage_profile: StorageProfile) -> dict[str, str]:
                 region=config.get("region", "us-east-1"),
                 path_style_access=config.get("path_style_access", True),
             )
-            return VastS3StorageProvider(vast_profile).spark_config()
+            return VastS3StorageProvider(vast_profile)
         if protocol == "nfs":
-            raise UnsupportedProviderError("VAST NFS mode is not yet implemented")
+            mount = config["mount"]
+            nfs_profile = VastNfsConnectionProfile(
+                mount_path=mount["path"], server=config["server"], export_path=config["exportPath"]
+            )
+            return VastNfsStorageProvider(nfs_profile)
         raise UnsupportedProviderError(f"VAST storage profile missing/invalid 'protocol': {protocol!r}")
 
     if storage_profile.provider == "adls":
@@ -91,6 +101,20 @@ def build_storage_config(storage_profile: StorageProfile) -> dict[str, str]:
         adls_profile = AdlsConnectionProfile(
             account_name=config["account_name"], container=config["container"], credentials=credentials
         )
-        return AdlsStorageProvider(adls_profile).spark_config()
+        return AdlsStorageProvider(adls_profile)
 
     raise UnsupportedProviderError(f"unsupported storage provider: {storage_profile.provider}")
+
+
+def build_storage_config(storage_profile: StorageProfile) -> dict[str, str]:
+    return _build_storage_provider(storage_profile).spark_config()
+
+
+def build_storage_volume_mounts(storage_profile: StorageProfile) -> list[dict] | None:
+    """Pod volume mounts the storage provider needs, if any (spec §48 —
+    VAST NFS). Kept separate from build_storage_config() rather than
+    changing that function's return shape: every existing caller only
+    ever needs the flat spark_config dict, and constructing the provider
+    twice for NFS mode is cheap (no I/O in any storage provider's
+    constructor)."""
+    return _build_storage_provider(storage_profile).volume_mounts()

@@ -193,15 +193,51 @@ class KubernetesExecutionProvider:
                 "driverArgs": [workload.application.entryPoint, *workload.arguments],
             }
 
+        spec: dict = {
+            **artifact_spec,
+            "sparkConf": spark_conf,
+            "runtimeVersions": {"sparkVersion": f"{workload.runtime.spark}.0"},
+        }
+
+        # VAST NFS mode (spec §48) — the one storage mode that isn't
+        # expressible as sparkConf at all. driverSpec/executorSpec only
+        # expose a podTemplateSpec field on this CRD generation (confirmed
+        # live: `kubectl get crd sparkapplications.spark.apache.org -o
+        # json`, no top-level volumes/volumeMounts fields exist) — a full
+        # Kubernetes PodTemplateSpec merged onto the operator's own
+        # generated pod, targeting its container by name (also confirmed
+        # live: spark-kubernetes-driver / spark-kubernetes-executor — this
+        # is Spark's own upstream Kubernetes-backend naming, not specific
+        # to this operator).
+        if run.resolved.volume_mounts:
+            volumes = [{"name": vm["name"], **vm["volume"]} for vm in run.resolved.volume_mounts]
+            volume_mounts = [
+                {"name": vm["name"], "mountPath": vm["mount_path"]} for vm in run.resolved.volume_mounts
+            ]
+            spec["driverSpec"] = {
+                "podTemplateSpec": {
+                    "spec": {
+                        "volumes": volumes,
+                        "containers": [{"name": "spark-kubernetes-driver", "volumeMounts": volume_mounts}],
+                    }
+                }
+            }
+            spec["executorSpec"] = {
+                "podTemplateSpec": {
+                    "spec": {
+                        "volumes": volumes,
+                        "containers": [
+                            {"name": "spark-kubernetes-executor", "volumeMounts": volume_mounts}
+                        ],
+                    }
+                }
+            }
+
         return {
             "apiVersion": f"{SPARK_APPLICATION_GROUP}/{SPARK_APPLICATION_VERSION}",
             "kind": "SparkApplication",
             "metadata": {"name": run_name, "namespace": self.profile.namespace},
-            "spec": {
-                **artifact_spec,
-                "sparkConf": spark_conf,
-                "runtimeVersions": {"sparkVersion": f"{workload.runtime.spark}.0"},
-            },
+            "spec": spec,
         }
 
     async def submit(self, run: RunRequest) -> ProviderRun:

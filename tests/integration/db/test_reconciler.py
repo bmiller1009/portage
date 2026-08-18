@@ -91,6 +91,7 @@ async def test_reconcile_once_advances_run_to_succeeded(
         provider_factory, "build_execution_provider", lambda execution_profile: fake_provider
     )
     monkeypatch.setattr(provider_factory, "build_storage_config", lambda storage_profile: {})
+    monkeypatch.setattr(provider_factory, "build_storage_volume_mounts", lambda storage_profile: None)
 
     await _seed_dataset_bindings(session, environment_name)
     workload_name, workload_version = workload_ref
@@ -147,6 +148,7 @@ async def test_reconcile_once_transitions_to_failed_on_validation_rejection(
         lambda execution_profile: RejectingProvider([RunState.QUEUED]),
     )
     monkeypatch.setattr(provider_factory, "build_storage_config", lambda storage_profile: {})
+    monkeypatch.setattr(provider_factory, "build_storage_volume_mounts", lambda storage_profile: None)
 
     await _seed_dataset_bindings(session, environment_name)
     workload_name, workload_version = workload_ref
@@ -178,6 +180,7 @@ async def test_cancel_runs_calls_provider_cancel_and_finalizes(
         provider_factory, "build_execution_provider", lambda execution_profile: fake_provider
     )
     monkeypatch.setattr(provider_factory, "build_storage_config", lambda storage_profile: {})
+    monkeypatch.setattr(provider_factory, "build_storage_volume_mounts", lambda storage_profile: None)
 
     await _seed_dataset_bindings(session, environment_name)
     workload_name, workload_version = workload_ref
@@ -225,6 +228,7 @@ async def test_reconcile_once_transitions_to_failed_on_missing_dataset_binding(
         lambda execution_profile: FakeExecutionProvider([RunState.QUEUED]),
     )
     monkeypatch.setattr(provider_factory, "build_storage_config", lambda storage_profile: {})
+    monkeypatch.setattr(provider_factory, "build_storage_volume_mounts", lambda storage_profile: None)
 
     workload_name, workload_version = workload_ref
     run, _created = await run_service.create_run(

@@ -11,6 +11,7 @@ from control_plane.provider_factory import (
     UnsupportedProviderError,
     build_execution_provider,
     build_storage_config,
+    build_storage_volume_mounts,
 )
 from providers.execution.databricks.provider import DatabricksExecutionProvider
 from providers.execution.kubernetes import provider as kubernetes_provider_module
@@ -110,12 +111,44 @@ def test_build_storage_config_vast_s3_mode(monkeypatch):
     assert config["spark.hadoop.fs.s3a.endpoint"] == "http://vast.local:9000"
 
 
-def test_build_storage_config_vast_nfs_mode_not_yet_implemented():
-    profile = StorageProfile(
-        name="vast-nfs", provider="vast", config={"protocol": "nfs"}, credential_reference={}
+def _vast_nfs_profile() -> StorageProfile:
+    return StorageProfile(
+        name="vast-nfs",
+        provider="vast",
+        config={"protocol": "nfs", "mount": {"path": "/vast"}, "server": "vast.example.com", "exportPath": "/export/portage"},
+        credential_reference={},
     )
-    with pytest.raises(UnsupportedProviderError, match="NFS"):
-        build_storage_config(profile)
+
+
+def test_build_storage_config_vast_nfs_mode_is_empty():
+    # Nothing NFS-specific is expressible as sparkConf — the real
+    # translation is build_storage_volume_mounts(), not this function.
+    assert build_storage_config(_vast_nfs_profile()) == {}
+
+
+def test_build_storage_volume_mounts_vast_nfs_mode():
+    mounts = build_storage_volume_mounts(_vast_nfs_profile())
+
+    assert mounts == [
+        {
+            "name": "vast-nfs-data",
+            "volume": {"nfs": {"server": "vast.example.com", "path": "/export/portage"}},
+            "mount_path": "/vast",
+        }
+    ]
+
+
+def test_build_storage_volume_mounts_none_for_s3(monkeypatch):
+    monkeypatch.setenv("PORTAGE_TEST_ACCESS_KEY", "AKIA123")
+    monkeypatch.setenv("PORTAGE_TEST_SECRET_KEY", "supersecret")
+    profile = StorageProfile(
+        name="phase0-minio",
+        provider="s3",
+        config={},
+        credential_reference={"provider": "env", "reference": "PORTAGE_TEST"},
+    )
+
+    assert build_storage_volume_mounts(profile) is None
 
 
 def test_build_storage_config_vast_missing_protocol():

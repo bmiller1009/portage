@@ -60,3 +60,7 @@ def test_capabilities_declares_path_bindings_only(profile):
     assert caps.protocol == "s3"
     assert caps.path_bindings is True
     assert caps.table_bindings is False
+
+
+def test_volume_mounts_none(profile):
+    assert S3StorageProvider(profile).volume_mounts() is None
