@@ -57,6 +57,10 @@ target-version = "py312"
 # FastAPI's dependency injection is Depends(...) in argument defaults —
 # that's the framework's idiom, not the antipattern B008 flags.
 "api/routers/*.py" = ["B008"]
+# Typer's own idiom for a repeatable CLI option is `list[str] =
+# typer.Option([])` in the argument default — same category of false
+# positive as the FastAPI case above.
+"cli/main.py" = ["B008"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]

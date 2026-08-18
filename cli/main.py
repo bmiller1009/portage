@@ -53,14 +53,18 @@ def dataset_list(dataset_name: str = typer.Option(None, "--dataset")) -> None:
 
 @workload_app.command("validate")
 def workload_validate(
-    file: str, environment: str | None = typer.Option(None, "--environment")
+    file: str, environment: list[str] = typer.Option([], "--environment")
 ) -> None:
     """Validate a portable workload definition against the v1alpha1 schema
-    (local, offline — no network call). With --environment, additionally
-    checks it against that environment's provider capabilities (spec §20-21)
-    via POST /v1/validate — the one REST call this otherwise-local command
-    makes, since capability matching needs the environment's registered
-    provider, which only the control plane knows about."""
+    (local, offline — no network call). With one or more --environment
+    flags, additionally checks it against each named environment's
+    provider capabilities (spec §20-21) via POST /v1/validate — the one
+    REST call this otherwise-local command makes, since capability
+    matching needs each environment's registered provider, which only the
+    control plane knows about. Passing --environment more than once is a
+    static, offline-safe way to check portability across providers before
+    ever attempting a live run (spec §66's "same workload, no application
+    changes" claim) — exits 1 if the workload fails against any of them."""
     try:
         workload = parse_workload(file)
     except ValidationError as e:
@@ -68,23 +72,27 @@ def workload_validate(
         raise typer.Exit(code=1) from e
     typer.echo(f"PASS: {file} ({workload.metadata.name}, spark {workload.runtime.spark})")
 
-    if environment is None:
-        return
+    any_failed = False
+    for env_name in environment:
+        resp = httpx.post(
+            f"{_api_base_url()}/v1/validate",
+            json={"workload": workload.model_dump(mode="json"), "environment_name": env_name},
+        )
+        if resp.status_code == 422:
+            typer.echo(f"FAIL: {env_name}: {resp.json()['detail']}")
+            any_failed = True
+            continue
+        resp.raise_for_status()
+        result = resp.json()
+        if not result["valid"]:
+            any_failed = True
+            for error in result["errors"]:
+                typer.echo(f"CAPABILITY MISMATCH: {env_name}: {error}")
+            continue
+        typer.echo(f"PASS: compatible with environment '{env_name}'")
 
-    resp = httpx.post(
-        f"{_api_base_url()}/v1/validate",
-        json={"workload": workload.model_dump(mode="json"), "environment_name": environment},
-    )
-    if resp.status_code == 422:
-        typer.echo(f"FAIL: {resp.json()['detail']}")
+    if any_failed:
         raise typer.Exit(code=1)
-    resp.raise_for_status()
-    result = resp.json()
-    if not result["valid"]:
-        for error in result["errors"]:
-            typer.echo(f"CAPABILITY MISMATCH: {error}")
-        raise typer.Exit(code=1)
-    typer.echo(f"PASS: compatible with environment '{environment}'")
 
 
 @app.command()

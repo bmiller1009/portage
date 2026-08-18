@@ -197,7 +197,7 @@ def test_workload_validate_without_environment_stays_local(monkeypatch):
     fake_post = Mock()
     monkeypatch.setattr(httpx, "post", fake_post)
 
-    plane_workload_validate(str(EXAMPLES_DIR / "wordcount.yaml"), environment=None)
+    plane_workload_validate(str(EXAMPLES_DIR / "wordcount.yaml"), environment=[])
 
     fake_post.assert_not_called()
 
@@ -206,7 +206,7 @@ def test_workload_validate_with_environment_posts_to_validate_endpoint(monkeypat
     fake_post = Mock(return_value=FakeResponse(200, {"valid": True, "errors": []}))
     monkeypatch.setattr(httpx, "post", fake_post)
 
-    plane_workload_validate(str(EXAMPLES_DIR / "wordcount.yaml"), environment="k8s-remote-v2")
+    plane_workload_validate(str(EXAMPLES_DIR / "wordcount.yaml"), environment=["k8s-remote-v2"])
 
     fake_post.assert_called_once()
     url, kwargs = fake_post.call_args[0][0], fake_post.call_args[1]
@@ -222,7 +222,7 @@ def test_workload_validate_exits_nonzero_on_capability_mismatch(monkeypatch):
     )
 
     with pytest.raises(typer.Exit) as exc_info:
-        plane_workload_validate(str(EXAMPLES_DIR / "wordcount.yaml"), environment="k8s-remote-v2")
+        plane_workload_validate(str(EXAMPLES_DIR / "wordcount.yaml"), environment=["k8s-remote-v2"])
     assert exc_info.value.exit_code == 1
 
 
@@ -232,5 +232,40 @@ def test_workload_validate_exits_nonzero_on_unknown_environment(monkeypatch):
     )
 
     with pytest.raises(typer.Exit) as exc_info:
-        plane_workload_validate(str(EXAMPLES_DIR / "wordcount.yaml"), environment="ghost")
+        plane_workload_validate(str(EXAMPLES_DIR / "wordcount.yaml"), environment=["ghost"])
     assert exc_info.value.exit_code == 1
+
+
+def test_workload_validate_multiple_environments_all_pass(monkeypatch, capsys):
+    """Cross-environment static portability validation (spec §66): one
+    workload checked against several environments in a single command."""
+    fake_post = Mock(return_value=FakeResponse(200, {"valid": True, "errors": []}))
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    plane_workload_validate(
+        str(EXAMPLES_DIR / "wordcount.yaml"), environment=["k8s-remote-v2", "azure-dbx-v1"]
+    )
+
+    assert fake_post.call_count == 2
+    called_envs = [c.kwargs["json"]["environment_name"] for c in fake_post.call_args_list]
+    assert called_envs == ["k8s-remote-v2", "azure-dbx-v1"]
+    out = capsys.readouterr().out
+    assert "PASS: compatible with environment 'k8s-remote-v2'" in out
+    assert "PASS: compatible with environment 'azure-dbx-v1'" in out
+
+
+def test_workload_validate_multiple_environments_mixed_exits_nonzero(monkeypatch, capsys):
+    responses = [
+        FakeResponse(200, {"valid": True, "errors": []}),
+        FakeResponse(200, {"valid": False, "errors": ["unsupported Spark version: 4.2"]}),
+    ]
+    monkeypatch.setattr(httpx, "post", Mock(side_effect=responses))
+
+    with pytest.raises(typer.Exit) as exc_info:
+        plane_workload_validate(
+            str(EXAMPLES_DIR / "wordcount.yaml"), environment=["k8s-remote-v2", "azure-dbx-v1"]
+        )
+    assert exc_info.value.exit_code == 1
+    out = capsys.readouterr().out
+    assert "PASS: compatible with environment 'k8s-remote-v2'" in out
+    assert "CAPABILITY MISMATCH: azure-dbx-v1: unsupported Spark version: 4.2" in out
