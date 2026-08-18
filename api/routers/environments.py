@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth import ROLE_OPERATOR, ROLE_VIEWER, Identity, require_role
 from api.schemas import EnvironmentCreate, EnvironmentOut
 from control_plane import repositories
 from control_plane.db import get_db_session
@@ -9,7 +10,11 @@ router = APIRouter(prefix="/v1/environments", tags=["environments"])
 
 
 @router.post("", response_model=EnvironmentOut, status_code=201)
-async def create_environment(body: EnvironmentCreate, session: AsyncSession = Depends(get_db_session)):
+async def create_environment(
+    body: EnvironmentCreate,
+    session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_OPERATOR)),
+):
     try:
         return await repositories.create_environment(
             session,
@@ -26,12 +31,19 @@ async def create_environment(body: EnvironmentCreate, session: AsyncSession = De
 
 
 @router.get("", response_model=list[EnvironmentOut])
-async def list_environments(session: AsyncSession = Depends(get_db_session)):
+async def list_environments(
+    session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_VIEWER)),
+):
     return await repositories.list_environments(session)
 
 
 @router.get("/{name}", response_model=EnvironmentOut)
-async def get_environment(name: str, session: AsyncSession = Depends(get_db_session)):
+async def get_environment(
+    name: str,
+    session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_VIEWER)),
+):
     try:
         return await repositories.get_environment(session, name)
     except repositories.NotFoundError as e:

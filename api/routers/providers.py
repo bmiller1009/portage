@@ -3,6 +3,7 @@ from dataclasses import asdict
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth import ROLE_VIEWER, Identity, require_role
 from api.schemas import ProviderCapabilitiesOut, ProviderOut
 from control_plane import provider_factory, repositories
 from control_plane.db import get_db_session
@@ -11,7 +12,10 @@ router = APIRouter(prefix="/v1/providers", tags=["providers"])
 
 
 @router.get("", response_model=list[ProviderOut])
-async def list_providers(session: AsyncSession = Depends(get_db_session)):
+async def list_providers(
+    session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_VIEWER)),
+):
     """Every registered ExecutionProfile/StorageProfile is a "provider"
     instance in the UI sense (spec §32's Providers page) — there's no
     separate provider-registry table, this just relabels the two profile
@@ -25,7 +29,11 @@ async def list_providers(session: AsyncSession = Depends(get_db_session)):
 
 
 @router.get("/{name}/capabilities", response_model=ProviderCapabilitiesOut)
-async def get_provider_capabilities(name: str, session: AsyncSession = Depends(get_db_session)):
+async def get_provider_capabilities(
+    name: str,
+    session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_VIEWER)),
+):
     """Read-only against the provider (a live capabilities() call), so —
     like GET /v1/runs/{id}/logs and POST /v1/validate — answered
     synchronously rather than deferred to the reconciler."""

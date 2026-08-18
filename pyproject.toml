@@ -24,6 +24,10 @@ dependencies = [
     "asyncpg>=0.30",
     "alembic>=1.13",
     "httpx>=0.27",
+    # OIDC (spec §33-34, §67): JWT verification against a JWKS endpoint —
+    # RS256 needs the cryptography backend, since real IdPs (Entra/Okta/
+    # Ping) never issue HS256 (symmetric-key) tokens for a public JWKS flow.
+    "pyjwt[crypto]>=2.9",
     "opentelemetry-api>=1.44",
     "opentelemetry-sdk>=1.44",
     # opentelemetry-exporter-prometheus is still pre-1.0 upstream (a 0.x
@@ -57,6 +61,7 @@ target-version = "py312"
 # FastAPI's dependency injection is Depends(...) in argument defaults —
 # that's the framework's idiom, not the antipattern B008 flags.
 "api/routers/*.py" = ["B008"]
+"api/auth.py" = ["B008"]
 # Typer's own idiom for a repeatable CLI option is `list[str] =
 # typer.Option([])` in the argument default — same category of false
 # positive as the FastAPI case above.

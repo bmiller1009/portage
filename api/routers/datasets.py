@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.auth import ROLE_OPERATOR, ROLE_VIEWER, Identity, require_role
 from api.schemas import DatasetBindingCreate, DatasetBindingOut
 from control_plane import repositories
 from control_plane.db import get_db_session
@@ -10,7 +11,9 @@ router = APIRouter(prefix="/v1/datasets", tags=["datasets"])
 
 @router.post("", response_model=DatasetBindingOut, status_code=201)
 async def create_dataset_binding(
-    body: DatasetBindingCreate, session: AsyncSession = Depends(get_db_session)
+    body: DatasetBindingCreate,
+    session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_OPERATOR)),
 ):
     try:
         return await repositories.create_dataset_binding(
@@ -30,13 +33,17 @@ async def create_dataset_binding(
 async def list_dataset_bindings(
     dataset_name: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_VIEWER)),
 ):
     return await repositories.list_dataset_bindings(session, dataset_name=dataset_name)
 
 
 @router.get("/{dataset_name}/{environment_name}", response_model=DatasetBindingOut)
 async def get_dataset_binding(
-    dataset_name: str, environment_name: str, session: AsyncSession = Depends(get_db_session)
+    dataset_name: str,
+    environment_name: str,
+    session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_VIEWER)),
 ):
     try:
         return await repositories.get_dataset_binding(session, dataset_name, environment_name)
