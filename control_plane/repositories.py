@@ -5,9 +5,10 @@ portable spec schemas happens in the API layer, not here.
 """
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from typing import Literal, overload
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control_plane.models import (
@@ -22,6 +23,7 @@ from control_plane.models import (
     StorageProfile,
     WorkloadDefinition,
 )
+from control_plane.run_state import RunState
 
 
 class AlreadyExistsError(Exception):
@@ -406,6 +408,64 @@ async def get_run(session: AsyncSession, run_id: uuid.UUID) -> Run:
 async def list_runs_by_state(session: AsyncSession, states: list[str]) -> list[Run]:
     result = await session.execute(select(Run).where(Run.state.in_(states)).order_by(Run.created_at))
     return list(result.scalars().all())
+
+
+# A run stuck in SUBMITTING longer than this was almost certainly abandoned
+# by a crashed reconciler process mid-submission (spec §57's Control Plane
+# Recovery Test) rather than one that's merely slow right now — comfortably
+# longer than one reconcile tick at the default 5s interval.
+_STUCK_SUBMITTING_GRACE_SECONDS = 30
+
+
+async def claim_runs_for_submission(session: AsyncSession) -> list[Run]:
+    """Atomically claims runs to (re-)submit: fresh ACCEPTED runs, plus any
+    run stuck in SUBMITTING past the grace period (a prior submission
+    attempt crashed between provider.submit() succeeding and this
+    transition being persisted — spec §57). `SELECT ... FOR UPDATE SKIP
+    LOCKED` lets concurrent reconciler replicas (HA deployment, spec §67)
+    each claim disjoint rows instead of racing on the same one.
+
+    Every claimed run is transitioned to SUBMITTING and committed exactly
+    ONCE, as a batch, in this same function — deliberately not via
+    transition_run_state()/update_run_state(), which each commit
+    individually and would release the FOR UPDATE lock on the
+    not-yet-processed rows after the very first commit, reopening the
+    exact race this function exists to close."""
+    cutoff = datetime.now(UTC) - timedelta(seconds=_STUCK_SUBMITTING_GRACE_SECONDS)
+    result = await session.execute(
+        select(Run)
+        .where(
+            or_(
+                Run.state == RunState.ACCEPTED.value,
+                (Run.state == RunState.SUBMITTING.value) & (Run.updated_at < cutoff),
+            )
+        )
+        .order_by(Run.created_at)
+        .with_for_update(skip_locked=True)
+    )
+    runs = list(result.scalars().all())
+    for run in runs:
+        from_state = run.state
+        run.state = RunState.SUBMITTING.value
+        session.add(
+            RunEvent(
+                run_id=run.id,
+                from_state=from_state,
+                to_state=RunState.SUBMITTING.value,
+                message="claimed for submission",
+            )
+        )
+    await session.commit()
+    for run in runs:
+        await session.refresh(run)
+    return runs
+
+
+async def increment_submission_attempts(session: AsyncSession, run: Run) -> int:
+    run.submission_attempts += 1
+    await session.commit()
+    await session.refresh(run)
+    return run.submission_attempts
 
 
 async def list_runs(

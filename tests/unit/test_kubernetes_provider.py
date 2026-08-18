@@ -21,12 +21,17 @@ class FakeCustomObjectsApi:
         self.created: dict | None = None
         self.deleted_name: str | None = None
         self.status_to_return: dict = {}
+        self.raise_on_create: Exception | None = None
+        self.get_call_count = 0
 
     def create_namespaced_custom_object(self, *, group, version, namespace, plural, body):
+        if self.raise_on_create is not None:
+            raise self.raise_on_create
         self.created = body
         return body
 
     def get_namespaced_custom_object(self, *, group, version, namespace, plural, name):
+        self.get_call_count += 1
         return {"metadata": {"name": name}, "status": self.status_to_return}
 
     def delete_namespaced_custom_object(self, *, group, version, namespace, plural, name):
@@ -162,6 +167,51 @@ def test_submit_creates_custom_object_and_returns_provider_run(profile, resolved
 
     assert fake_api.created is not None
     assert result.provider_run_id == "wordcount-abc123"
+
+
+def test_submit_recovers_from_already_exists_conflict(profile, resolved_run):
+    """Regression test for the duplicate-submission fix (spec §26/§57/§67):
+    a 409 on create means a prior submission attempt for this exact run
+    already succeeded (crash recovery or a raced HA replica) — submit()
+    must recover by reading the existing resource back, not fail a run
+    that's actually fine."""
+    from kubernetes.client.exceptions import ApiException
+
+    fake_api = FakeCustomObjectsApi()
+    fake_api.raise_on_create = ApiException(status=409, reason="Conflict")
+    provider = KubernetesExecutionProvider(profile, api_client=fake_api)
+
+    result = asyncio.run(provider.submit(resolved_run))
+
+    assert result.provider_run_id == "wordcount-abc123"
+    assert fake_api.get_call_count == 1
+
+
+@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+def test_submit_raises_retryable_on_transient_api_status(profile, resolved_run, status):
+    from kubernetes.client.exceptions import ApiException
+
+    from control_plane.execution_provider import RetryableProviderError
+
+    fake_api = FakeCustomObjectsApi()
+    fake_api.raise_on_create = ApiException(status=status, reason="transient")
+    provider = KubernetesExecutionProvider(profile, api_client=fake_api)
+
+    with pytest.raises(RetryableProviderError):
+        asyncio.run(provider.submit(resolved_run))
+
+
+def test_submit_raises_terminal_on_other_api_status(profile, resolved_run):
+    from kubernetes.client.exceptions import ApiException
+
+    from control_plane.execution_provider import TerminalProviderError
+
+    fake_api = FakeCustomObjectsApi()
+    fake_api.raise_on_create = ApiException(status=400, reason="bad request")
+    provider = KubernetesExecutionProvider(profile, api_client=fake_api)
+
+    with pytest.raises(TerminalProviderError):
+        asyncio.run(provider.submit(resolved_run))
 
 
 @pytest.mark.parametrize(

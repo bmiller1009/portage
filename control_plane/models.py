@@ -136,6 +136,11 @@ class Run(Base):
     environment_name: Mapped[str] = mapped_column(ForeignKey("environments.name", ondelete="RESTRICT"))
     # Canonical RunState (control_plane/run_state.py), stored as its string value.
     state: Mapped[str] = mapped_column(String(32), index=True)
+    # Count of provider.submit() attempts that failed with a
+    # RetryableProviderError (spec §26/§67 reconciliation hardening) —
+    # bounds retries so a persistently-broken provider doesn't retry
+    # forever; incremented, never reset.
+    submission_attempts: Mapped[int] = mapped_column(default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

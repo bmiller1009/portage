@@ -74,6 +74,21 @@ class CapabilitySet:
     spark_connect: bool
 
 
+class RetryableProviderError(Exception):
+    """A provider submission/status/cancel call failed in a way spec §26
+    says is safe to retry (timeout, 429, transient 5xx, transient API
+    blip) — the reconciler requeues the run rather than failing it.
+    Providers raise this themselves, since only they know which of their
+    own error shapes are transient."""
+
+
+class TerminalProviderError(Exception):
+    """A provider call failed in a way that must not be retried (spec
+    §26: "must not silently rerun an application after confirmed
+    execution failure") — the reconciler fails the run immediately, same
+    as an unclassified exception, but explicitly rather than by default."""
+
+
 class ExecutionProvider(Protocol):
     async def validate(self, workload: ResolvedWorkload) -> ValidationResult: ...
     async def submit(self, run: RunRequest) -> ProviderRun: ...

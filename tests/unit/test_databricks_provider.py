@@ -26,12 +26,17 @@ class FakeJobsAPI:
     def __init__(self):
         self.submitted_tasks: list | None = None
         self.submitted_run_name: str | None = None
+        self.submitted_idempotency_token: str | None = None
         self.canceled_run_id: int | None = None
         self.run_to_return: SimpleNamespace | None = None
+        self.raise_on_submit: Exception | None = None
 
-    def submit(self, *, run_name, tasks):
+    def submit(self, *, run_name, tasks, idempotency_token=None):
+        if self.raise_on_submit is not None:
+            raise self.raise_on_submit
         self.submitted_run_name = run_name
         self.submitted_tasks = tasks
+        self.submitted_idempotency_token = idempotency_token
         return SimpleNamespace(run_id=42)
 
     def get_run(self, *, run_id):
@@ -202,6 +207,44 @@ def test_submit_calls_jobs_submit_and_returns_provider_run(profile, resolved_run
     assert fake_jobs.submitted_tasks is not None
     assert len(fake_jobs.submitted_tasks) == 1
     assert result.provider_run_id == "42"
+
+
+def test_submit_passes_run_id_as_idempotency_token(profile, resolved_run):
+    """Regression test for the duplicate-submission fix (spec §26/§67): a
+    retried submit() for the same run must carry the same token, so
+    Databricks itself de-dupes instead of starting a second real job."""
+    fake_jobs = FakeJobsAPI()
+    provider = DatabricksExecutionProvider(profile, client=cast(WorkspaceClientLike, SimpleNamespace(jobs=fake_jobs)))
+
+    asyncio.run(provider.submit(resolved_run))
+
+    assert fake_jobs.submitted_idempotency_token == "abc123"
+
+
+def test_submit_raises_retryable_on_transient_databricks_error(profile, resolved_run):
+    from databricks.sdk import errors as dbx_errors
+
+    from control_plane.execution_provider import RetryableProviderError
+
+    fake_jobs = FakeJobsAPI()
+    fake_jobs.raise_on_submit = dbx_errors.TooManyRequests("rate limited")
+    provider = DatabricksExecutionProvider(profile, client=cast(WorkspaceClientLike, SimpleNamespace(jobs=fake_jobs)))
+
+    with pytest.raises(RetryableProviderError):
+        asyncio.run(provider.submit(resolved_run))
+
+
+def test_submit_raises_terminal_on_permanent_databricks_error(profile, resolved_run):
+    from databricks.sdk import errors as dbx_errors
+
+    from control_plane.execution_provider import TerminalProviderError
+
+    fake_jobs = FakeJobsAPI()
+    fake_jobs.raise_on_submit = dbx_errors.PermissionDenied("nope")
+    provider = DatabricksExecutionProvider(profile, client=cast(WorkspaceClientLike, SimpleNamespace(jobs=fake_jobs)))
+
+    with pytest.raises(TerminalProviderError):
+        asyncio.run(provider.submit(resolved_run))
 
 
 @pytest.mark.parametrize(

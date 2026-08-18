@@ -13,7 +13,12 @@ from datetime import UTC, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control_plane import metrics, provider_factory, repositories, run_service
-from control_plane.execution_provider import ResolvedWorkload, RunRequest
+from control_plane.execution_provider import (
+    ResolvedWorkload,
+    RetryableProviderError,
+    RunRequest,
+    TerminalProviderError,
+)
 from control_plane.run_state import TERMINAL_STATES, RunState
 from spec.artifact.v1alpha1 import (
     Artifact,
@@ -97,8 +102,15 @@ async def _resolve_artifact(
     )
 
 
+MAX_SUBMISSION_ATTEMPTS = 5
+
+
 async def submit_new_runs(session: AsyncSession) -> None:
-    for run in await repositories.list_runs_by_state(session, [RunState.ACCEPTED.value]):
+    # Transitions every claimed run to SUBMITTING and commits before this
+    # loop calls provider.submit() (spec §57/§67) — a real, persisted claim,
+    # unlike the old ACCEPTED-until-submit-returns window a crash could
+    # land in. Also picks up runs stuck in SUBMITTING from a prior crash.
+    for run in await repositories.claim_runs_for_submission(session):
         try:
             workload_row = await repositories.get_workload_definition(
                 session, run.workload_name, version=run.workload_version
@@ -129,7 +141,31 @@ async def submit_new_runs(session: AsyncSession) -> None:
                 )
                 continue
 
-            provider_run = await provider.submit(RunRequest(run_id=str(run.id), resolved=resolved))
+            try:
+                provider_run = await provider.submit(RunRequest(run_id=str(run.id), resolved=resolved))
+            except RetryableProviderError as e:
+                metrics.provider_errors_total.add(1)
+                attempts = await repositories.increment_submission_attempts(session, run)
+                if attempts >= MAX_SUBMISSION_ATTEMPTS:
+                    await run_service.transition_run_state(
+                        session,
+                        run,
+                        RunState.FAILED,
+                        message=f"exceeded max submission attempts ({attempts}): {e}",
+                    )
+                else:
+                    await run_service.transition_run_state(
+                        session,
+                        run,
+                        RunState.ACCEPTED,
+                        message=f"retryable submission error (attempt {attempts}): {e}",
+                    )
+                continue
+            except TerminalProviderError as e:
+                metrics.provider_errors_total.add(1)
+                await run_service.transition_run_state(session, run, RunState.FAILED, message=str(e))
+                continue
+
             await repositories.create_provider_run(
                 session,
                 run_id=run.id,
@@ -146,8 +182,15 @@ async def submit_new_runs(session: AsyncSession) -> None:
                 session, run, RunState.QUEUED, message=f"submitted as {provider_run.provider_run_id}"
             )
         except Exception as e:  # noqa: BLE001 - deliberate: one run's failure must not stop the loop
+            # Unclassified — a provider bug or something genuinely unknown,
+            # not a RetryableProviderError/TerminalProviderError the
+            # provider deliberately raised. Kept terminal (same as before
+            # this issue) rather than silently retried, but labeled so
+            # it's visibly different from a provider's own classification.
             metrics.provider_errors_total.add(1)
-            await run_service.transition_run_state(session, run, RunState.FAILED, message=str(e))
+            await run_service.transition_run_state(
+                session, run, RunState.FAILED, message=f"unclassified error: {e}"
+            )
 
 
 async def poll_active_runs(session: AsyncSession) -> None:

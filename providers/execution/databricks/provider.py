@@ -29,6 +29,8 @@ at provider-construction time.
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
+from databricks.sdk import errors as dbx_errors
+from databricks.sdk.errors.base import DatabricksError
 from databricks.sdk.service import compute as dbx_compute
 from databricks.sdk.service import jobs as dbx_jobs
 
@@ -38,11 +40,27 @@ from control_plane.execution_provider import (
     LogReference,
     ProviderRun,
     ProviderStatus,
+    RetryableProviderError,
     RunRequest,
+    TerminalProviderError,
     ValidationResult,
     match_capabilities,
 )
 from control_plane.run_state import RunState
+
+# Databricks SDK error types spec §26 says are safe to retry (rate limit,
+# transient unavailability, transient server error, timeout) — everything
+# else DatabricksError-derived (bad request, permission denied, not found,
+# unauthenticated, ...) is terminal. Confirmed real via SDK introspection
+# (databricks.sdk.errors.STATUS_CODE_MAPPING), not guessed.
+_RETRYABLE_DATABRICKS_ERRORS = (
+    dbx_errors.TooManyRequests,
+    dbx_errors.RequestLimitExceeded,
+    dbx_errors.TemporarilyUnavailable,
+    dbx_errors.InternalError,
+    dbx_errors.DeadlineExceeded,
+    dbx_errors.OperationTimeout,
+)
 
 _SUPPORTED_SPARK_VERSIONS = {"4.0", "4.1"}
 
@@ -95,7 +113,9 @@ class JobsAPILike(Protocol):
     uses — a Protocol so unit tests can inject a fake without subclassing
     the real SDK client."""
 
-    def submit(self, *, run_name: str, tasks: list[dbx_jobs.SubmitTask]) -> Any: ...
+    def submit(
+        self, *, run_name: str, tasks: list[dbx_jobs.SubmitTask], idempotency_token: str | None = None
+    ) -> Any: ...
     def get_run(self, *, run_id: int) -> Any: ...
     def cancel_run(self, *, run_id: int) -> Any: ...
 
@@ -210,10 +230,22 @@ class DatabricksExecutionProvider:
 
     async def submit(self, run: RunRequest) -> ProviderRun:
         task = self.build_run_submission(run)
-        result = self._get_client().jobs.submit(
-            run_name=f"{run.resolved.workload.metadata.name}-{run.run_id}", tasks=[task]
-        )
-        return ProviderRun(provider_run_id=str(result.run_id))
+        try:
+            result = self._get_client().jobs.submit(
+                run_name=f"{run.resolved.workload.metadata.name}-{run.run_id}",
+                tasks=[task],
+                # run.run_id is the run's own stable UUID (spec §26/§67) —
+                # a retried submit() with the same token returns the
+                # existing run instead of creating a second real
+                # execution, confirmed real via SDK introspection
+                # (JobsAPI.submit(..., idempotency_token: Optional[str])).
+                idempotency_token=run.run_id,
+            )
+            return ProviderRun(provider_run_id=str(result.run_id))
+        except _RETRYABLE_DATABRICKS_ERRORS as e:
+            raise RetryableProviderError(str(e)) from e
+        except DatabricksError as e:
+            raise TerminalProviderError(str(e)) from e
 
     async def status(self, provider_run_id: str) -> ProviderStatus:
         run = self._get_client().jobs.get_run(run_id=int(provider_run_id))

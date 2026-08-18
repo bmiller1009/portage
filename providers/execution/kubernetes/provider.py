@@ -21,13 +21,16 @@ from typing import Any, Protocol, cast
 
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
+from kubernetes.client.exceptions import ApiException
 
 from control_plane.execution_provider import (
     CapabilitySet,
     LogReference,
     ProviderRun,
     ProviderStatus,
+    RetryableProviderError,
     RunRequest,
+    TerminalProviderError,
     ValidationResult,
     match_capabilities,
 )
@@ -73,6 +76,12 @@ _STATE_MAP: dict[str, RunState] = {
 _NON_INFORMATIVE_STATES = {"ResourceReleased"}
 
 _SUPPORTED_SPARK_VERSIONS = {"4.1", "4.2"}
+
+# Kubernetes API status codes spec §26 says are safe to retry (timeout,
+# rate limit, transient server errors) — anything else on submit() is
+# terminal. 409 (already exists) isn't in here at all: submit() handles it
+# as a recovery signal, not an error (see submit()).
+_RETRYABLE_API_STATUS_CODES = {429, 500, 502, 503, 504}
 
 
 class CustomObjectsApiLike(Protocol):
@@ -257,15 +266,36 @@ class KubernetesExecutionProvider:
 
     async def submit(self, run: RunRequest) -> ProviderRun:
         manifest = self.build_spark_application(run)
-        result = await asyncio.to_thread(
-            self._api.create_namespaced_custom_object,
-            group=SPARK_APPLICATION_GROUP,
-            version=SPARK_APPLICATION_VERSION,
-            namespace=self.profile.namespace,
-            plural=SPARK_APPLICATION_PLURAL,
-            body=manifest,
-        )
-        return ProviderRun(provider_run_id=result["metadata"]["name"], raw=result)
+        try:
+            result = await asyncio.to_thread(
+                self._api.create_namespaced_custom_object,
+                group=SPARK_APPLICATION_GROUP,
+                version=SPARK_APPLICATION_VERSION,
+                namespace=self.profile.namespace,
+                plural=SPARK_APPLICATION_PLURAL,
+                body=manifest,
+            )
+            return ProviderRun(provider_run_id=result["metadata"]["name"], raw=result)
+        except ApiException as e:
+            if e.status == 409:
+                # Already exists — the CR name is deterministic
+                # (workload+run_id), so this means a prior submission
+                # attempt for this exact run already succeeded (crash
+                # recovery or a raced HA replica, spec §57/§67), not a real
+                # error. Recover by reading back the existing resource
+                # instead of failing a run that's actually fine.
+                existing = await asyncio.to_thread(
+                    self._api.get_namespaced_custom_object,
+                    group=SPARK_APPLICATION_GROUP,
+                    version=SPARK_APPLICATION_VERSION,
+                    namespace=self.profile.namespace,
+                    plural=SPARK_APPLICATION_PLURAL,
+                    name=manifest["metadata"]["name"],
+                )
+                return ProviderRun(provider_run_id=existing["metadata"]["name"], raw=existing)
+            if e.status in _RETRYABLE_API_STATUS_CODES:
+                raise RetryableProviderError(str(e)) from e
+            raise TerminalProviderError(str(e)) from e
 
     async def status(self, provider_run_id: str) -> ProviderStatus:
         obj = await asyncio.to_thread(
