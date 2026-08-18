@@ -7,6 +7,7 @@ import asyncio
 import logging
 import os
 
+from control_plane import metrics
 from control_plane.db import get_session_maker
 from reconciler.service import reconcile_once
 
@@ -21,10 +22,12 @@ async def run_forever(interval_seconds: float) -> None:
         async with session_maker() as session:
             try:
                 await reconcile_once(session)
+                metrics.record_successful_reconcile()
             except Exception:
                 logger.exception("reconcile_once failed")
         await asyncio.sleep(interval_seconds)
 
 
 if __name__ == "__main__":
+    metrics.start_metrics_server(int(os.environ.get("PORTAGE_RECONCILER_METRICS_PORT", "9091")))
     asyncio.run(run_forever(float(os.environ.get("PORTAGE_RECONCILE_INTERVAL_SECONDS", "5"))))

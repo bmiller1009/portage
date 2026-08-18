@@ -8,15 +8,28 @@ rather than crashing the loop — control-plane resilience (ADR 0007) applies
 to the reconciler itself, not just to the API staying up during an outage.
 """
 
+from datetime import UTC, datetime
+
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control_plane import provider_factory, repositories, run_service
+from control_plane import metrics, provider_factory, repositories, run_service
 from control_plane.execution_provider import ResolvedWorkload, RunRequest
-from control_plane.run_state import RunState
+from control_plane.run_state import TERMINAL_STATES, RunState
 from spec.dataset.v1alpha1 import Dataset, DatasetMetadata, PathBinding, resolve_dataset_config
 from spec.workload.v1alpha1 import SparkWorkload
 
 _ACTIVE_STATES = [RunState.SUBMITTING.value, RunState.QUEUED.value, RunState.RUNNING.value]
+
+
+async def _event_timestamp(session: AsyncSession, run_id, to_state: str) -> datetime | None:
+    """Latest event that transitioned into to_state, or None if it never
+    has — used to compute latency histograms from RunEvent's own timestamps
+    rather than tracking duration state separately."""
+    events = await repositories.list_run_events(session, run_id)
+    for event in reversed(events):
+        if event.to_state == to_state:
+            return event.created_at
+    return None
 
 
 async def _resolve_dataset_config(
@@ -82,10 +95,16 @@ async def submit_new_runs(session: AsyncSession) -> None:
                 provider=execution_profile.provider,
                 raw=provider_run.raw or {},
             )
+            accepted_at = await _event_timestamp(session, run.id, RunState.ACCEPTED.value)
+            if accepted_at is not None:
+                metrics.submission_latency_seconds.record(
+                    (datetime.now(UTC) - accepted_at).total_seconds()
+                )
             await run_service.transition_run_state(
                 session, run, RunState.QUEUED, message=f"submitted as {provider_run.provider_run_id}"
             )
         except Exception as e:  # noqa: BLE001 - deliberate: one run's failure must not stop the loop
+            metrics.provider_errors_total.add(1)
             await run_service.transition_run_state(session, run, RunState.FAILED, message=str(e))
 
 
@@ -104,10 +123,23 @@ async def poll_active_runs(session: AsyncSession) -> None:
 
             status = await provider.status(provider_run.provider_run_id)
             if status.state.value != run.state:
+                if status.state == RunState.RUNNING:
+                    queued_at = await _event_timestamp(session, run.id, RunState.QUEUED.value)
+                    if queued_at is not None:
+                        metrics.queue_latency_seconds.record(
+                            (datetime.now(UTC) - queued_at).total_seconds()
+                        )
+                elif status.state in TERMINAL_STATES:
+                    running_at = await _event_timestamp(session, run.id, RunState.RUNNING.value)
+                    if running_at is not None:
+                        metrics.execution_duration_seconds.record(
+                            (datetime.now(UTC) - running_at).total_seconds()
+                        )
                 await run_service.transition_run_state(
                     session, run, status.state, message=status.provider_native_status
                 )
         except Exception as e:  # noqa: BLE001 - same rationale as submit_new_runs
+            metrics.provider_errors_total.add(1)
             await run_service.transition_run_state(session, run, RunState.FAILED, message=str(e))
 
 
@@ -129,6 +161,7 @@ async def cancel_runs(session: AsyncSession) -> None:
             await provider.cancel(provider_run.provider_run_id)
             await run_service.transition_run_state(session, run, RunState.CANCELED, message="canceled")
         except Exception as e:  # noqa: BLE001 - same rationale as submit_new_runs
+            metrics.provider_errors_total.add(1)
             await run_service.transition_run_state(session, run, RunState.FAILED, message=str(e))
 
 

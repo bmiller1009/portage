@@ -5,9 +5,17 @@ POST /v1/runs only ever writes ACCEPTED and returns; reconciler/service.py
 is what actually submits to an execution provider and advances the state.
 POST /v1/validate (issue #24) is the one exception to "the API never talks
 to providers" for a mutating action — validate() is read-only against the
-provider, so it's answered synchronously rather than deferred."""
+provider, so it's answered synchronously rather than deferred.
 
-from fastapi import FastAPI
+GET /metrics (issue #22, spec §29) exposes this process's own OpenTelemetry/
+Prometheus registry (control_plane/metrics.py) — run-creation counts, some
+terminal-state counts, and API error rates. Submission/queue/execution
+latencies, provider errors, and reconciliation lag live on the reconciler's
+own :9091/metrics instead (reconciler/main.py) — separate process, separate
+memory, see control_plane/metrics.py's docstring for why."""
+
+from fastapi import FastAPI, Request, Response
+from prometheus_client import CONTENT_TYPE_LATEST
 
 from api.routers import (
     datasets,
@@ -18,6 +26,7 @@ from api.routers import (
     validate,
     workloads,
 )
+from control_plane import metrics
 
 app = FastAPI(title="Portage Control Plane")
 
@@ -30,6 +39,35 @@ app.include_router(runs.router)
 app.include_router(validate.router)
 
 
+def _route_path(request: Request) -> str:
+    route = request.scope.get("route")
+    return route.path if route is not None else request.url.path
+
+
+@app.middleware("http")
+async def count_api_errors(request: Request, call_next):
+    try:
+        response = await call_next(request)
+    except Exception:
+        # An unhandled exception never reaches the status-code check below —
+        # Starlette's BaseHTTPMiddleware re-raises rather than returning a
+        # response for it — so it needs its own count before re-raising.
+        metrics.api_errors_total.add(
+            1, {"method": request.method, "route": _route_path(request), "status_code": "500"}
+        )
+        raise
+    if response.status_code >= 400:
+        metrics.api_errors_total.add(
+            1,
+            {
+                "method": request.method,
+                "route": _route_path(request),
+                "status_code": str(response.status_code),
+            },
+        )
+    return response
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -38,3 +76,8 @@ def health() -> dict[str, str]:
 @app.get("/ready")
 def ready() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics_endpoint() -> Response:
+    return Response(content=metrics.render_prometheus_text(), media_type=CONTENT_TYPE_LATEST)

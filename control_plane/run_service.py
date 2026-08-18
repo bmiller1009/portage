@@ -8,7 +8,7 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control_plane import provider_factory, repositories
+from control_plane import metrics, provider_factory, repositories
 from control_plane.execution_provider import LogReference, ResolvedWorkload, ValidationResult
 from control_plane.models import Run
 from control_plane.run_state import TERMINAL_STATES, RunState
@@ -57,6 +57,7 @@ async def create_run(
     )
     if idempotency_key is not None:
         await repositories.create_idempotency_key(session, key=idempotency_key, run_id=run.id)
+    metrics.runs_created_total.add(1)
     return run, True
 
 
@@ -76,6 +77,8 @@ async def transition_run_state(
     await repositories.create_run_event(
         session, run_id=run.id, from_state=old_state, to_state=new_state.value, message=message
     )
+    if new_state in TERMINAL_STATES:
+        metrics.runs_terminal_total.add(1, {"state": new_state.value})
     return run
 
 

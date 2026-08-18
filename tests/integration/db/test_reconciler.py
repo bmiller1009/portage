@@ -6,7 +6,7 @@ kubernetes.md and the plan for this slice)."""
 
 import pytest
 
-from control_plane import provider_factory, repositories, run_service
+from control_plane import metrics, provider_factory, repositories, run_service
 from control_plane.execution_provider import (
     CapabilitySet,
     LogReference,
@@ -61,6 +61,27 @@ async def _seed_dataset_bindings(session, environment_name: str) -> None:
         )
 
 
+def _metric_sample_count(name: str) -> float:
+    """Parses the `_count` line the Prometheus histogram exposition format
+    produces for `name`, e.g. `portage_run_submission_latency_seconds_count
+    {...} 3.0` -> 3.0. Used to assert a metric moved by a known delta rather
+    than asserting an absolute value, since the OTel registry accumulates
+    across every test in the same process."""
+    text = metrics.render_prometheus_text().decode()
+    for line in text.splitlines():
+        if line.startswith(f"{name}_count{{"):
+            return float(line.rsplit(" ", 1)[1])
+    return 0.0
+
+
+def _counter_value(name: str) -> float:
+    text = metrics.render_prometheus_text().decode()
+    for line in text.splitlines():
+        if line.startswith((f"{name}{{", f"{name} ")):
+            return float(line.rsplit(" ", 1)[1])
+    return 0.0
+
+
 @pytest.mark.asyncio
 async def test_reconcile_once_advances_run_to_succeeded(
     session, environment_name, workload_ref, monkeypatch
@@ -80,17 +101,24 @@ async def test_reconcile_once_advances_run_to_succeeded(
         environment_name=environment_name,
     )
 
+    submission_before = _metric_sample_count("portage_run_submission_latency_seconds")
+    queue_before = _metric_sample_count("portage_run_queue_latency_seconds")
+    execution_before = _metric_sample_count("portage_run_execution_duration_seconds")
+
     await reconciler_service.reconcile_once(session)
     run = await run_service.get_run(session, run.id)
     assert run.state == RunState.QUEUED.value
+    assert _metric_sample_count("portage_run_submission_latency_seconds") == submission_before + 1
 
     await reconciler_service.reconcile_once(session)
     run = await run_service.get_run(session, run.id)
     assert run.state == RunState.RUNNING.value
+    assert _metric_sample_count("portage_run_queue_latency_seconds") == queue_before + 1
 
     await reconciler_service.reconcile_once(session)
     run = await run_service.get_run(session, run.id)
     assert run.state == RunState.SUCCEEDED.value
+    assert _metric_sample_count("portage_run_execution_duration_seconds") == execution_before + 1
 
     events = await run_service.list_run_events(session, run.id)
     assert [e.to_state for e in events] == [
@@ -206,7 +234,10 @@ async def test_reconcile_once_transitions_to_failed_on_missing_dataset_binding(
         environment_name=environment_name,
     )
 
+    errors_before = _counter_value("portage_provider_errors_total")
+
     await reconciler_service.reconcile_once(session)
 
     run = await run_service.get_run(session, run.id)
     assert run.state == RunState.FAILED.value
+    assert _counter_value("portage_provider_errors_total") == errors_before + 1
