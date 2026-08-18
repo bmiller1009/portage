@@ -71,7 +71,13 @@ def resolved_run() -> RunRequest:
 
 @pytest.fixture
 def resolved_jar_run() -> RunRequest:
+    # examples/wordcount-jar.yaml is spark "4.2" (fine for its primary,
+    # Kubernetes-side use — the K8s Spark Operator supports 4.0-4.2). No
+    # Databricks Runtime ships Spark 4.2 yet (see _SUPPORTED_SPARK_VERSIONS),
+    # so this Databricks-specific fixture overrides just the version rather
+    # than changing the shared example file.
     workload = parse_workload(EXAMPLES_DIR / "wordcount-jar.yaml")
+    workload = workload.model_copy(update={"runtime": workload.runtime.model_copy(update={"spark": "4.1"})})
     resolved = ResolvedWorkload(workload=workload, dataset_config={}, environment_name="databricks-mock")
     return RunRequest(run_id="abc123", resolved=resolved)
 
@@ -239,6 +245,20 @@ def test_validate_rejects_unsupported_spark_version(profile, resolved_run):
     assert result.valid is False
 
 
+def test_validate_rejects_spark_4_2(profile, resolved_run):
+    """No Databricks Runtime ships Spark 4.2 yet (checked Aug 2026) —
+    regression test for the runtime compatibility matrix: this must not
+    silently PASS just because Kubernetes' examples/wordcount.yaml (which
+    resolved_run is built from) happens to declare spark: "4.2"."""
+    resolved_run.resolved.workload.runtime.spark = "4.2"
+    provider = DatabricksExecutionProvider(profile)
+
+    result = asyncio.run(provider.validate(resolved_run.resolved))
+
+    assert result.valid is False
+    assert "4.2" in result.errors[0]
+
+
 def test_validate_rejects_dynamic_allocation_requirement(profile, resolved_run):
     """Databricks capabilities() declares dynamic_allocation=False."""
     resolved_run.resolved.workload.requirements.dynamicAllocation = True
@@ -254,3 +274,9 @@ def test_capabilities_reports_no_dynamic_allocation(profile):
     provider = DatabricksExecutionProvider(profile)
     caps = asyncio.run(provider.capabilities())
     assert caps.dynamic_allocation is False
+
+
+def test_capabilities_reports_current_supported_spark_versions(profile):
+    provider = DatabricksExecutionProvider(profile)
+    caps = asyncio.run(provider.capabilities())
+    assert caps.spark_versions == ["4.0", "4.1"]

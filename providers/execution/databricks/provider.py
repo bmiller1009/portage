@@ -44,17 +44,23 @@ from control_plane.execution_provider import (
 )
 from control_plane.run_state import RunState
 
-_SUPPORTED_SPARK_VERSIONS = {"4.1", "4.2"}
+_SUPPORTED_SPARK_VERSIONS = {"4.0", "4.1"}
 
-# Databricks Runtime <-> Apache Spark version compatibility (spec §46):
-# Runtime 19 = Spark 4.2.0, Runtime 18 LTS = Spark 4.1.0. The exact Jobs API
-# `spark_version` cluster identifier string (e.g. "16.4.x-scala2.12"-shaped)
-# is only available from a live workspace via w.clusters.spark_versions() —
-# these are documented placeholders to be confirmed against a real
+# Databricks Runtime <-> Apache Spark version compatibility (spec §46),
+# verified against current public docs (docs.databricks.com/aws/en/release-
+# notes/runtime/, checked Aug 2026): Databricks Runtime 17.3 LTS ships
+# Spark 4.0.0; the 18.x series (latest 18.2) ships Spark 4.1.0. No
+# Databricks Runtime ships Spark 4.2 yet, so it's deliberately excluded
+# from _SUPPORTED_SPARK_VERSIONS above — claiming support for it would
+# make validate() return a false PASS for a workload that cannot actually
+# run on any Databricks cluster today. The exact Jobs API `spark_version`
+# cluster identifier string (e.g. "17.3.x-scala2.13"-shaped) is only
+# available from a live workspace via w.clusters.spark_versions() — these
+# are best-effort values from public docs, to be confirmed against a real
 # workspace before any live submission is attempted.
 _SPARK_TO_DBR_CLUSTER_VERSION = {
-    "4.2": "PLACEHOLDER-runtime-19.x-confirm-via-clusters.spark_versions",
-    "4.1": "PLACEHOLDER-runtime-18.x-lts-confirm-via-clusters.spark_versions",
+    "4.1": "PLACEHOLDER-runtime-18.x-confirm-via-clusters.spark_versions",
+    "4.0": "PLACEHOLDER-runtime-17.3-lts-confirm-via-clusters.spark_versions",
 }
 
 # Native Databricks RunLifeCycleState / RunResultState -> canonical RunState
