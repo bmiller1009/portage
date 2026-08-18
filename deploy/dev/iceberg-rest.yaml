@@ -6,6 +6,14 @@
 # Credentials here are the same dev-only MinIO credentials already
 # committed in deploy/dev/minio.yaml — never used outside this local
 # cluster.
+#
+# CATALOG_* env var naming (confirmed against the fixture's own source,
+# apache/iceberg docker/iceberg-rest-fixture, RESTCatalogServer's env-var
+# loader): strip the CATALOG_ prefix, then "__" (double underscore)
+# becomes "-" and "_" (single underscore) becomes ".", lowercased. E.g.
+# CATALOG_S3_ACCESS__KEY__ID -> s3.access-key-id. Getting this backwards
+# (as an earlier version of this manifest did) silently produces an
+# unrecognized property name instead of an error.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -25,15 +33,39 @@ spec:
         - name: iceberg-rest
           image: apache/iceberg-rest-fixture:1.10.1
           env:
+            # s3a (not s3) — confirmed live: Spark's hadoop-aws classpath
+            # only registers a FileSystem for the "s3a" scheme
+            # (org.apache.hadoop.fs.s3a.S3AFileSystem), so an
+            # s3://-prefixed warehouse throws
+            # UnsupportedFileSystemException: No FileSystem for scheme
+            # "s3" once a Spark job writes through
+            # org.apache.iceberg.hadoop.HadoopFileIO. Matches the s3a://
+            # convention already used everywhere else in this project's
+            # dataset/artifact URIs.
             - name: CATALOG_WAREHOUSE
-              value: s3://portage-local/iceberg-warehouse
-            - name: CATALOG_S3__ENDPOINT
+              value: s3a://portage-local/iceberg-warehouse
+            # Forces the catalog server to always use Iceberg's own
+            # native S3 client (AWS SDK-based) rather than probing for
+            # Hadoop's S3AFileSystem, which this image's classpath
+            # doesn't include — confirmed live via a 500
+            # ClassNotFoundException without this set.
+            - name: CATALOG_IO__IMPL
+              value: org.apache.iceberg.aws.s3.S3FileIO
+            # AWS SDK v2 unconditionally resolves a region even against
+            # a non-AWS S3-compatible endpoint — confirmed live via
+            # "Unable to load region from any of the providers in the
+            # chain" without this set. The value itself is never used to
+            # pick an endpoint (CATALOG_S3_ENDPOINT below does that), so
+            # any syntactically valid region name works.
+            - name: AWS_REGION
+              value: us-east-1
+            - name: CATALOG_S3_ENDPOINT
               value: http://minio.portage-storage.svc.cluster.local:9000
-            - name: CATALOG_S3__ACCESS__KEY__ID
+            - name: CATALOG_S3_ACCESS__KEY__ID
               value: portage-dev
-            - name: CATALOG_S3__SECRET__ACCESS__KEY
+            - name: CATALOG_S3_SECRET__ACCESS__KEY
               value: portage-dev-secret
-            - name: CATALOG_S3__PATH__STYLE__ACCESS
+            - name: CATALOG_S3_PATH__STYLE__ACCESS
               value: "true"
           ports:
             - containerPort: 8181

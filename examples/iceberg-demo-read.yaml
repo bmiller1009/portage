@@ -1,0 +1,39 @@
+apiVersion: runtime/v1alpha1
+kind: SparkWorkload
+
+metadata:
+  name: iceberg-demo-read
+  version: "0.2.0"
+
+runtime:
+  spark: "4.1"
+
+application:
+  type: python-wheel
+  artifact: artifact://iceberg-demo/0.1.0
+  entryPoint: iceberg_demo.jobs.read_demo_table
+
+datasets:
+  inputs:
+    table:
+      dataset: demo.table
+  outputs:
+    readback:
+      dataset: demo.readback
+
+resources:
+  driver:
+    cores: 1
+    memory: 2Gi
+
+  executor:
+    cores: 1
+    memory: 2Gi
+
+  scaling:
+    minExecutors: 1
+    maxExecutors: 1
+
+execution:
+  timeout: 15m
+  retries: 0

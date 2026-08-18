@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "iceberg-demo"
+version = "0.1.0"
+description = "v0.5 live-verification fixture: writes and reads a real Iceberg table through Portage's table dataset bindings (spec §11), proving spark.portable.dataset.<name>.identifier end to end."
+requires-python = ">=3.10"
+
+# pyspark itself is provided by the Spark base image at runtime, same as
+# examples/wordcount_app — listed here only so the wheel is locally
+# importable/testable.
+dependencies = ["pyspark==4.1.3"]
+
+[project.scripts]
+write-demo-table = "iceberg_demo.jobs:write_demo_table"
+read-demo-table = "iceberg_demo.jobs:read_demo_table"
+
+[tool.setuptools.packages.find]
+include = ["iceberg_demo*"]

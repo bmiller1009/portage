@@ -76,7 +76,8 @@ target-version = "py312"
 testpaths = ["tests/unit"]
 
 [tool.pyright]
-# examples/wordcount_app is a standalone package (its own pyproject.toml,
-# runs inside the Spark container image, not the portage venv) — pyspark
-# is intentionally not a portage dependency, so it's out of scope here.
-exclude = ["examples/wordcount_app", ".venv", "build", "dist"]
+# examples/wordcount_app and examples/iceberg_demo_app are standalone
+# packages (their own pyproject.toml, run inside the Spark container
+# image, not the portage venv) — pyspark is intentionally not a portage
+# dependency, so they're out of scope here.
+exclude = ["examples/wordcount_app", "examples/iceberg_demo_app", ".venv", "build", "dist"]

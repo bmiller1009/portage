@@ -22,6 +22,7 @@ from control_plane.execution_provider import (
 from control_plane.models import Run
 from control_plane.run_state import RunState
 from reconciler import service as reconciler_service
+from spec.workload.v1alpha1 import SparkWorkload
 
 
 class FakeExecutionProvider:
@@ -577,3 +578,83 @@ async def test_cancel_survives_a_transient_cancel_error(session, environment_nam
     await reconciler_service.cancel_runs(session)
     run = await run_service.get_run(session, run.id)
     assert run.state == RunState.CANCELED.value
+
+
+@pytest.mark.asyncio
+async def test_resolve_dataset_config_reads_table_binding_from_real_db(session, workload_ref):
+    """A real end-to-end read of a persisted kind="table" DatasetBinding
+    row (uri column repurposed to hold the table identifier, spec §11) —
+    confirms reconciler_service._resolve_dataset_config's new kind branch
+    against real Postgres, not just the pure spec-layer unit tests."""
+    workload_name, workload_version = workload_ref
+    workload_row = await repositories.get_workload_definition(
+        session, workload_name, version=workload_version
+    )
+    workload = SparkWorkload.model_validate(workload_row.definition)
+
+    exec_profile = await repositories.create_execution_profile(
+        session,
+        name=f"exec-{uuid4().hex[:8]}",
+        provider="kubernetes",
+        config={"namespace": "default", "service_account": "spark", "image": "portage/wordcount:0.1.0"},
+    )
+    storage_profile = await repositories.create_storage_profile(
+        session,
+        name=f"storage-{uuid4().hex[:8]}",
+        provider="s3",
+        config={
+            "endpoint_url": "http://minio.local:9000",
+            "iceberg_catalog_uri": "http://iceberg-rest:8181",
+            "iceberg_warehouse": "s3://portage-local/iceberg-warehouse",
+        },
+        credential_reference={"provider": "env", "reference": "PORTAGE_TEST"},
+    )
+    environment_name = f"env-{uuid4().hex[:8]}"
+    await repositories.create_environment(
+        session,
+        name=environment_name,
+        execution_provider="kubernetes",
+        execution_profile_name=exec_profile.name,
+        storage_provider="s3",
+        storage_profile_name=storage_profile.name,
+    )
+
+    await repositories.create_dataset_binding(
+        session,
+        dataset_name="wordcount.raw",
+        environment_name=environment_name,
+        kind="table",
+        uri="analytics.wordcount.raw",
+    )
+    await repositories.create_dataset_binding(
+        session,
+        dataset_name="wordcount.counts",
+        environment_name=environment_name,
+        kind="path",
+        uri="s3a://bucket/wordcount.counts",
+    )
+
+    storage_config = {
+        "spark.hadoop.fs.s3a.access.key": "test-access-key",
+        "spark.hadoop.fs.s3a.secret.key": "test-secret-key",
+        "spark.hadoop.fs.s3a.path.style.access": "true",
+        "spark.hadoop.fs.s3a.endpoint": "http://minio.local:9000",
+    }
+    config = await reconciler_service._resolve_dataset_config(
+        session, workload, environment_name, storage_profile, storage_config
+    )
+
+    assert config == {
+        "spark.portable.dataset.wordcount.raw.identifier": "portage_iceberg.analytics.wordcount.raw",
+        "spark.portable.dataset.wordcount.counts.uri": "s3a://bucket/wordcount.counts",
+        "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
+        "spark.sql.catalog.portage_iceberg": "org.apache.iceberg.spark.SparkCatalog",
+        "spark.sql.catalog.portage_iceberg.type": "rest",
+        "spark.sql.catalog.portage_iceberg.uri": "http://iceberg-rest:8181",
+        "spark.sql.catalog.portage_iceberg.warehouse": "s3://portage-local/iceberg-warehouse",
+        "spark.sql.catalog.portage_iceberg.client.region": "us-east-1",
+        "spark.sql.catalog.portage_iceberg.s3.endpoint": "http://minio.local:9000",
+        "spark.sql.catalog.portage_iceberg.s3.access-key-id": "test-access-key",
+        "spark.sql.catalog.portage_iceberg.s3.secret-access-key": "test-secret-key",
+        "spark.sql.catalog.portage_iceberg.s3.path-style-access": "true",
+    }

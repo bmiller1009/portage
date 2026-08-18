@@ -19,6 +19,7 @@ from control_plane.execution_provider import (
     RunRequest,
     TerminalProviderError,
 )
+from control_plane.models import StorageProfile
 from control_plane.run_state import TERMINAL_STATES, RunState
 from spec.artifact.v1alpha1 import (
     Artifact,
@@ -27,7 +28,14 @@ from spec.artifact.v1alpha1 import (
     parse_artifact_reference,
     resolve_artifact_uri,
 )
-from spec.dataset.v1alpha1 import Dataset, DatasetMetadata, PathBinding, resolve_dataset_config
+from spec.dataset.v1alpha1 import (
+    Dataset,
+    DatasetMetadata,
+    PathBinding,
+    TableBinding,
+    resolve_dataset_config,
+    resolve_iceberg_catalog_config,
+)
 from spec.workload.v1alpha1 import SparkWorkload
 
 _ACTIVE_STATES = [RunState.SUBMITTING.value, RunState.QUEUED.value, RunState.RUNNING.value]
@@ -45,11 +53,25 @@ async def _event_timestamp(session: AsyncSession, run_id, to_state: str) -> date
 
 
 async def _resolve_dataset_config(
-    session: AsyncSession, workload: SparkWorkload, environment_name: str
+    session: AsyncSession,
+    workload: SparkWorkload,
+    environment_name: str,
+    storage_profile: StorageProfile,
+    storage_config: dict[str, str],
 ) -> dict[str, str]:
     """Adapts persisted DatasetBinding rows into the shape
     spec/dataset/v1alpha1.py's resolve_dataset_config() already expects,
-    reusing that function rather than duplicating its logic."""
+    reusing that function rather than duplicating its logic. A row's
+    `kind` selects PathBinding vs TableBinding (§11) — for the latter, the
+    `uri` column holds the table's fully-qualified identifier rather than
+    a URI, the same column repurposed rather than adding a new one.
+
+    storage_config is the caller's already-resolved
+    provider_factory.build_storage_config(storage_profile) output — reused
+    here (not re-resolved) to source Iceberg's native S3 client config
+    (spark.sql.catalog.<name>.s3.*) from the same credentials the
+    spark.hadoop.fs.s3a.* keys already carry, since both configure access
+    to the same underlying bucket."""
     refs = list(workload.datasets.inputs.values()) + list(workload.datasets.outputs.values())
     datasets: dict[str, Dataset] = {}
     for ref in refs:
@@ -57,16 +79,32 @@ async def _resolve_dataset_config(
             session, ref.dataset, environment_name, required=False
         )
         if binding_row is not None:
-            # Path bindings only for now (spec §11 — table bindings are a
-            # later milestone); DatasetBinding.kind exists for forward
-            # compatibility but PathBinding itself only accepts "path".
+            binding = (
+                TableBinding(identifier=binding_row.uri)
+                if binding_row.kind == "table"
+                else PathBinding(uri=binding_row.uri)
+            )
             datasets[ref.dataset] = Dataset(
                 apiVersion="runtime/v1alpha1",
                 kind="Dataset",
                 metadata=DatasetMetadata(name=ref.dataset),
-                bindings={environment_name: PathBinding(uri=binding_row.uri)},
+                bindings={environment_name: binding},
             )
-    return resolve_dataset_config(workload, datasets, environment_name)
+    config = resolve_dataset_config(workload, datasets, environment_name)
+    config.update(
+        resolve_iceberg_catalog_config(
+            workload,
+            datasets,
+            environment_name,
+            iceberg_catalog_uri=storage_profile.config.get("iceberg_catalog_uri"),
+            iceberg_warehouse=storage_profile.config.get("iceberg_warehouse"),
+            s3_endpoint=storage_config.get("spark.hadoop.fs.s3a.endpoint"),
+            s3_access_key=storage_config.get("spark.hadoop.fs.s3a.access.key"),
+            s3_secret_key=storage_config.get("spark.hadoop.fs.s3a.secret.key"),
+            s3_path_style_access=storage_config.get("spark.hadoop.fs.s3a.path.style.access"),
+        )
+    )
+    return config
 
 
 async def _resolve_artifact(
@@ -124,11 +162,14 @@ async def submit_new_runs(session: AsyncSession) -> None:
             storage_profile = await repositories.get_storage_profile(
                 session, environment.storage_profile_name
             )
+            storage_config = provider_factory.build_storage_config(storage_profile)
 
             resolved = ResolvedWorkload(
                 workload=workload,
-                dataset_config=await _resolve_dataset_config(session, workload, run.environment_name),
-                storage_config=provider_factory.build_storage_config(storage_profile),
+                dataset_config=await _resolve_dataset_config(
+                    session, workload, run.environment_name, storage_profile, storage_config
+                ),
+                storage_config=storage_config,
                 environment_name=run.environment_name,
                 volume_mounts=provider_factory.build_storage_volume_mounts(storage_profile),
             )

@@ -50,7 +50,9 @@ def dataset_list(dataset_name: str = typer.Option(None, "--dataset")) -> None:
     resp = httpx.get(f"{_api_base_url()}/v1/datasets", params=params)
     resp.raise_for_status()
     for binding in resp.json():
-        typer.echo(f"{binding['dataset_name']}\t{binding['environment_name']}\t{binding['uri']}")
+        typer.echo(
+            f"{binding['dataset_name']}\t{binding['environment_name']}\t{binding['kind']}\t{binding['uri']}"
+        )
 
 
 @workload_app.command("validate")
