@@ -122,3 +122,31 @@ def test_build_storage_config_vast_missing_protocol():
     profile = StorageProfile(name="vast-bad", provider="vast", config={}, credential_reference={})
     with pytest.raises(UnsupportedProviderError, match="protocol"):
         build_storage_config(profile)
+
+
+def test_build_storage_config_adls_static_key(monkeypatch):
+    monkeypatch.setenv("PORTAGE_TEST_ACCOUNT_KEY", "supersecret")
+    profile = StorageProfile(
+        name="adls-prod",
+        provider="adls",
+        config={"account_name": "portageadls", "container": "raw"},
+        credential_reference={"provider": "env", "reference": "PORTAGE_TEST"},
+    )
+
+    config = build_storage_config(profile)
+
+    assert config["spark.hadoop.fs.azure.account.key.portageadls.dfs.core.windows.net"] == "supersecret"
+
+
+def test_build_storage_config_adls_workload_identity(monkeypatch):
+    monkeypatch.delenv("PORTAGE_NOKEY_ACCOUNT_KEY", raising=False)
+    profile = StorageProfile(
+        name="adls-wi",
+        provider="adls",
+        config={"account_name": "portageadls", "container": "raw"},
+        credential_reference={"provider": "env", "reference": "PORTAGE_NOKEY"},
+    )
+
+    config = build_storage_config(profile)
+
+    assert config["spark.hadoop.fs.azure.account.auth.type.portageadls.dfs.core.windows.net"] == "OAuth"

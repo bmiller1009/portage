@@ -6,10 +6,20 @@ services) are future work, per spec §35's own "potential providers" list.
 """
 
 import os
+from dataclasses import dataclass
 
 
 class CredentialResolutionError(Exception):
     pass
+
+
+@dataclass
+class AdlsCredentials:
+    # None means "use workload identity" (spec §50: preferred over static
+    # storage keys) rather than a static account key — ADLS's credential
+    # shape genuinely isn't a key pair like S3/VAST's, so this can't reuse
+    # _resolve_env_key_pair()'s tuple[str, str] return type.
+    account_key: str | None
 
 
 def _resolve_env_key_pair(credential_reference: dict) -> tuple[str, str]:
@@ -43,3 +53,18 @@ def resolve_vast_credentials(credential_reference: dict) -> tuple[str, str]:
     """VAST S3 mode uses the same key-pair auth model as S3 (spec §48) —
     same env-var-suffix convention as resolve_s3_credentials()."""
     return _resolve_env_key_pair(credential_reference)
+
+
+def resolve_adls_credentials(credential_reference: dict) -> AdlsCredentials:
+    """{"provider": "env", "reference": "PORTAGE_ADLS"} -> AdlsCredentials
+    from os.environ.get("PORTAGE_ADLS_ACCOUNT_KEY") — absent (not a
+    KeyError, since this one's optional) means workload identity."""
+    provider = credential_reference.get("provider")
+    if provider != "env":
+        raise CredentialResolutionError(f"unsupported credential provider: {provider}")
+
+    reference = credential_reference.get("reference")
+    if not reference:
+        raise CredentialResolutionError("credential_reference is missing 'reference'")
+
+    return AdlsCredentials(account_key=os.environ.get(f"{reference}_ACCOUNT_KEY"))

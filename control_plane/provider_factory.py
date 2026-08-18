@@ -7,7 +7,11 @@ turn persisted config into a live provider.
 
 from typing import cast
 
-from control_plane.credentials import resolve_s3_credentials, resolve_vast_credentials
+from control_plane.credentials import (
+    resolve_adls_credentials,
+    resolve_s3_credentials,
+    resolve_vast_credentials,
+)
 from control_plane.execution_provider import ExecutionProvider
 from control_plane.models import ExecutionProfile, StorageProfile
 from providers.execution.databricks.provider import (
@@ -16,6 +20,7 @@ from providers.execution.databricks.provider import (
     WorkspaceClientLike,
 )
 from providers.execution.kubernetes.provider import KubernetesExecutionProvider, KubernetesProfile
+from providers.storage.adls.provider import AdlsConnectionProfile, AdlsStorageProvider
 from providers.storage.s3.provider import S3ConnectionProfile, S3StorageProvider
 from providers.storage.vast.provider import VastS3ConnectionProfile, VastS3StorageProvider
 
@@ -79,5 +84,13 @@ def build_storage_config(storage_profile: StorageProfile) -> dict[str, str]:
         if protocol == "nfs":
             raise UnsupportedProviderError("VAST NFS mode is not yet implemented")
         raise UnsupportedProviderError(f"VAST storage profile missing/invalid 'protocol': {protocol!r}")
+
+    if storage_profile.provider == "adls":
+        credentials = resolve_adls_credentials(storage_profile.credential_reference)
+        config = storage_profile.config
+        adls_profile = AdlsConnectionProfile(
+            account_name=config["account_name"], container=config["container"], credentials=credentials
+        )
+        return AdlsStorageProvider(adls_profile).spark_config()
 
     raise UnsupportedProviderError(f"unsupported storage provider: {storage_profile.provider}")
