@@ -103,3 +103,10 @@ class RunEventOut(BaseModel):
     from_state: str | None
     to_state: str
     message: str | None
+
+
+class RunLogsOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    description: str
+    uri: str | None

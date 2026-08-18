@@ -111,6 +111,28 @@ async def poll_active_runs(session: AsyncSession) -> None:
             await run_service.transition_run_state(session, run, RunState.FAILED, message=str(e))
 
 
+async def cancel_runs(session: AsyncSession) -> None:
+    for run in await repositories.list_runs_by_state(session, [RunState.CANCELING.value]):
+        try:
+            provider_run = await repositories.get_latest_provider_run(session, run.id)
+            if provider_run is None:
+                # Never submitted — nothing at a provider to cancel.
+                await run_service.transition_run_state(session, run, RunState.CANCELED, message="canceled")
+                continue
+
+            environment = await repositories.get_environment(session, run.environment_name)
+            execution_profile = await repositories.get_execution_profile(
+                session, environment.execution_profile_name
+            )
+            provider = provider_factory.build_execution_provider(execution_profile)
+
+            await provider.cancel(provider_run.provider_run_id)
+            await run_service.transition_run_state(session, run, RunState.CANCELED, message="canceled")
+        except Exception as e:  # noqa: BLE001 - same rationale as submit_new_runs
+            await run_service.transition_run_state(session, run, RunState.FAILED, message=str(e))
+
+
 async def reconcile_once(session: AsyncSession) -> None:
     await submit_new_runs(session)
     await poll_active_runs(session)
+    await cancel_runs(session)

@@ -98,3 +98,62 @@ async def test_create_run_requires_existing_environment(session, workload_ref):
             workload_version=workload_version,
             environment_name=_unique("ghost-env"),
         )
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_never_submitted_finalizes_immediately(session, environment_name, workload_ref):
+    workload_name, workload_version = workload_ref
+    run, _created = await run_service.create_run(
+        session, workload_name=workload_name, workload_version=workload_version,
+        environment_name=environment_name,
+    )
+
+    result, pending = await run_service.cancel_run(session, run.id)
+
+    assert pending is False
+    assert result.state == RunState.CANCELED.value
+    events = await run_service.list_run_events(session, run.id)
+    assert [e.to_state for e in events] == [RunState.ACCEPTED.value, RunState.CANCELED.value]
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_active_run_moves_to_canceling(session, environment_name, workload_ref):
+    workload_name, workload_version = workload_ref
+    run, _created = await run_service.create_run(
+        session, workload_name=workload_name, workload_version=workload_version,
+        environment_name=environment_name,
+    )
+    await repositories.create_provider_run(
+        session, run_id=run.id, provider_run_id="fake-run-1", provider="kubernetes", raw={}
+    )
+    await run_service.transition_run_state(session, run, RunState.RUNNING, message="running")
+
+    result, pending = await run_service.cancel_run(session, run.id)
+
+    assert pending is True
+    assert result.state == RunState.CANCELING.value
+
+
+@pytest.mark.asyncio
+async def test_cancel_run_rejects_terminal_state(session, environment_name, workload_ref):
+    workload_name, workload_version = workload_ref
+    run, _created = await run_service.create_run(
+        session, workload_name=workload_name, workload_version=workload_version,
+        environment_name=environment_name,
+    )
+    await run_service.transition_run_state(session, run, RunState.SUCCEEDED, message="done")
+
+    with pytest.raises(run_service.InvalidRunStateError):
+        await run_service.cancel_run(session, run.id)
+
+
+@pytest.mark.asyncio
+async def test_get_run_logs_raises_before_submission(session, environment_name, workload_ref):
+    workload_name, workload_version = workload_ref
+    run, _created = await run_service.create_run(
+        session, workload_name=workload_name, workload_version=workload_version,
+        environment_name=environment_name,
+    )
+
+    with pytest.raises(run_service.RunNotSubmittedError):
+        await run_service.get_run_logs(session, run.id)

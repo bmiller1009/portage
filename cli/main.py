@@ -1,13 +1,9 @@
-"""`plane` CLI (docs/architecture/spec.md §31). Most subcommands are stubs
-until the REST API (v0.1 milestone) exists and the CLI can become a pure
-API client per §31's own rule ("no direct database access, no hidden
-Kubernetes access"). `plane run` is a deliberate, documented Phase 0
-exception: it calls execution providers directly and synchronously,
-because proving portability doesn't require the async reconciler (spec
-§24) yet — see cli/environments.py for how environment names resolve to
-providers."""
+"""`plane` CLI (docs/architecture/spec.md §31). A pure REST client of the
+control-plane API — no direct database access, no direct provider access
+(§31). `run`/`status`/`cancel`/`logs` all talk to /v1/runs; the async
+submit/poll/cancel work itself happens in reconciler/service.py, not here.
+"""
 
-import asyncio
 import os
 import time
 import uuid
@@ -16,15 +12,7 @@ import httpx
 import typer
 from pydantic import ValidationError
 
-from cli.environments import (
-    build_execution_provider,
-    build_storage_config,
-    load_datasets_for_workload,
-    load_environment,
-)
-from control_plane.execution_provider import ResolvedWorkload, RunRequest
 from control_plane.run_state import TERMINAL_STATES, RunState
-from spec.dataset.v1alpha1 import resolve_dataset_config
 from spec.workload.v1alpha1 import parse_workload
 
 app = typer.Typer(name="plane", no_args_is_help=True)
@@ -81,39 +69,44 @@ def run(
     timeout_seconds: int = typer.Option(600, "--timeout"),
     poll_interval_seconds: float = typer.Option(5, "--poll-interval"),
 ) -> None:
-    """Submit a workload run against the named environment and poll until it
-    reaches a terminal state (spec §23)."""
+    """Submit a workload run against the named environment (spec §24) and
+    poll until it reaches a terminal state (spec §23)."""
     workload = parse_workload(workload_file)
-    environment_def = load_environment(environment)
-    datasets = load_datasets_for_workload(workload)
+    base_url = _api_base_url()
 
-    resolved = ResolvedWorkload(
-        workload=workload,
-        dataset_config=resolve_dataset_config(workload, datasets, environment),
-        storage_config=build_storage_config(environment_def),
-        environment_name=environment,
+    # Registering is idempotent from the CLI's point of view — a 409 just
+    # means someone (possibly this same command, last time) already did it.
+    register_resp = httpx.post(f"{base_url}/v1/workloads", json=workload.model_dump(mode="json"))
+    if register_resp.status_code not in (201, 409):
+        register_resp.raise_for_status()
+
+    create_resp = httpx.post(
+        f"{base_url}/v1/runs",
+        json={
+            "workload_name": workload.metadata.name,
+            "workload_version": workload.metadata.version,
+            "environment_name": environment,
+        },
+        headers={"Idempotency-Key": uuid.uuid4().hex},
     )
-    provider = build_execution_provider(environment_def)
-    request = RunRequest(run_id=uuid.uuid4().hex[:8], resolved=resolved)
-
-    validation = asyncio.run(provider.validate(resolved))
-    if not validation.valid:
-        for error in validation.errors:
-            typer.echo(f"VALIDATION FAILED: {error}")
-        raise typer.Exit(code=1)
-
-    provider_run = asyncio.run(provider.submit(request))
-    typer.echo(f"submitted: provider_run_id={provider_run.provider_run_id}")
+    create_resp.raise_for_status()
+    run_id = create_resp.json()["id"]
+    typer.echo(f"submitted: run_id={run_id}")
 
     deadline = time.monotonic() + timeout_seconds
+    last_state = None
     while time.monotonic() < deadline:
-        run_status = asyncio.run(provider.status(provider_run.provider_run_id))
-        typer.echo(f"status: {run_status.state.value} ({run_status.provider_native_status})")
-        if run_status.state in TERMINAL_STATES:
-            if run_status.state == RunState.SUCCEEDED:
-                typer.echo(f"SUCCEEDED: {provider_run.provider_run_id}")
+        status_resp = httpx.get(f"{base_url}/v1/runs/{run_id}")
+        status_resp.raise_for_status()
+        run_state = status_resp.json()["state"]
+        if run_state != last_state:
+            typer.echo(f"status: {run_state}")
+            last_state = run_state
+        if RunState(run_state) in TERMINAL_STATES:
+            if run_state == RunState.SUCCEEDED.value:
+                typer.echo(f"SUCCEEDED: {run_id}")
                 return
-            typer.echo(f"FAILED: {provider_run.provider_run_id} ({run_status.state.value})")
+            typer.echo(f"FAILED: {run_id} ({run_state})")
             raise typer.Exit(code=1)
         time.sleep(poll_interval_seconds)
 
@@ -123,9 +116,57 @@ def run(
 
 @app.command()
 def status(run_id: str) -> None:
-    """Show run status. Not yet implemented — depends on the REST API (v0.1)."""
-    typer.echo("not yet implemented — plane status depends on the v0.1 REST API")
-    raise typer.Exit(code=1)
+    """Show current run status and its event history."""
+    base_url = _api_base_url()
+    resp = httpx.get(f"{base_url}/v1/runs/{run_id}")
+    if resp.status_code == 404:
+        typer.echo(f"run not found: {run_id}")
+        raise typer.Exit(code=1)
+    resp.raise_for_status()
+    run = resp.json()
+    typer.echo(
+        f"{run['id']}\t{run['state']}\t{run['workload_name']}@{run['workload_version']}"
+        f"\t{run['environment_name']}"
+    )
+
+    events_resp = httpx.get(f"{base_url}/v1/runs/{run_id}/events")
+    events_resp.raise_for_status()
+    for event in events_resp.json():
+        typer.echo(f"  {event['from_state']} -> {event['to_state']}: {event['message'] or ''}")
+
+
+@app.command()
+def cancel(run_id: str) -> None:
+    """Request cancellation of a run (spec §23 — CANCELING/CANCELED)."""
+    base_url = _api_base_url()
+    resp = httpx.delete(f"{base_url}/v1/runs/{run_id}")
+    if resp.status_code == 404:
+        typer.echo(f"run not found: {run_id}")
+        raise typer.Exit(code=1)
+    if resp.status_code == 409:
+        typer.echo(f"cannot cancel: {resp.json()['detail']}")
+        raise typer.Exit(code=1)
+    resp.raise_for_status()
+    run = resp.json()
+    typer.echo(f"{run['state']}: {run_id}")
+
+
+@app.command()
+def logs(run_id: str) -> None:
+    """Show a reference to the run's provider-side logs (not fetched log
+    content — a kubectl command or a Databricks run URL, depending on the
+    provider)."""
+    base_url = _api_base_url()
+    resp = httpx.get(f"{base_url}/v1/runs/{run_id}/logs")
+    if resp.status_code == 404:
+        typer.echo(f"run not found: {run_id}")
+        raise typer.Exit(code=1)
+    if resp.status_code == 409:
+        typer.echo(resp.json()["detail"])
+        raise typer.Exit(code=1)
+    resp.raise_for_status()
+    ref = resp.json()
+    typer.echo(f"{ref['description']}: {ref['uri']}")
 
 
 if __name__ == "__main__":

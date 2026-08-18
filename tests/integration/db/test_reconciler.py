@@ -136,6 +136,56 @@ async def test_reconcile_once_transitions_to_failed_on_validation_rejection(
 
 
 @pytest.mark.asyncio
+async def test_cancel_runs_calls_provider_cancel_and_finalizes(
+    session, environment_name, workload_ref, monkeypatch
+):
+    fake_provider = FakeExecutionProvider([RunState.RUNNING])
+    cancelled_ids = []
+
+    async def _cancel(provider_run_id):
+        cancelled_ids.append(provider_run_id)
+
+    fake_provider.cancel = _cancel
+    monkeypatch.setattr(
+        provider_factory, "build_execution_provider", lambda execution_profile: fake_provider
+    )
+    monkeypatch.setattr(provider_factory, "build_storage_config", lambda storage_profile: {})
+
+    await _seed_dataset_bindings(session, environment_name)
+    workload_name, workload_version = workload_ref
+    run, _created = await run_service.create_run(
+        session,
+        workload_name=workload_name,
+        workload_version=workload_version,
+        environment_name=environment_name,
+    )
+
+    # Get the run submitted and into an active state first.
+    await reconciler_service.reconcile_once(session)
+    run = await run_service.get_run(session, run.id)
+    assert run.state == RunState.RUNNING.value
+
+    result, pending = await run_service.cancel_run(session, run.id)
+    assert pending is True
+    assert result.state == RunState.CANCELING.value
+
+    await reconciler_service.cancel_runs(session)
+
+    run = await run_service.get_run(session, run.id)
+    assert run.state == RunState.CANCELED.value
+    assert cancelled_ids == ["fake-provider-run-1"]
+
+    events = await run_service.list_run_events(session, run.id)
+    assert [e.to_state for e in events] == [
+        RunState.ACCEPTED.value,
+        RunState.QUEUED.value,
+        RunState.RUNNING.value,
+        RunState.CANCELING.value,
+        RunState.CANCELED.value,
+    ]
+
+
+@pytest.mark.asyncio
 async def test_reconcile_once_transitions_to_failed_on_missing_dataset_binding(
     session, environment_name, workload_ref, monkeypatch
 ):

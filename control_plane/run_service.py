@@ -8,9 +8,18 @@ import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control_plane import repositories
+from control_plane import provider_factory, repositories
+from control_plane.execution_provider import LogReference
 from control_plane.models import Run
-from control_plane.run_state import RunState
+from control_plane.run_state import TERMINAL_STATES, RunState
+
+
+class InvalidRunStateError(Exception):
+    pass
+
+
+class RunNotSubmittedError(Exception):
+    pass
 
 
 async def create_run(
@@ -67,3 +76,34 @@ async def transition_run_state(
         session, run_id=run.id, from_state=old_state, to_state=new_state.value, message=message
     )
     return run
+
+
+async def cancel_run(session: AsyncSession, run_id: uuid.UUID) -> tuple[Run, bool]:
+    """Requests cancellation. A run that was never submitted (still
+    ACCEPTED) is finalized immediately — there's nothing at a provider to
+    cancel. Otherwise this only records intent (CANCELING); reconciler/
+    service.py's cancel_runs() is what actually calls provider.cancel()
+    and finalizes to CANCELED, same async-only-the-reconciler-touches-
+    providers shape as submission. Returns (run, pending) so the API layer
+    can report 202 (still in flight) vs 200 (already final)."""
+    run = await repositories.get_run(session, run_id)
+    if run.state in {s.value for s in TERMINAL_STATES}:
+        raise InvalidRunStateError(f"run '{run_id}' is already in terminal state {run.state}")
+    if run.state == RunState.ACCEPTED.value:
+        await transition_run_state(session, run, RunState.CANCELED, message="canceled before submission")
+        return run, False
+    await transition_run_state(session, run, RunState.CANCELING, message="cancellation requested")
+    return run, True
+
+
+async def get_run_logs(session: AsyncSession, run_id: uuid.UUID) -> LogReference:
+    """Read-only against the provider, so unlike cancel this is answered
+    synchronously rather than deferred to the reconciler."""
+    run = await repositories.get_run(session, run_id)
+    provider_run = await repositories.get_latest_provider_run(session, run.id)
+    if provider_run is None:
+        raise RunNotSubmittedError(f"run '{run_id}' has not been submitted to a provider yet")
+    environment = await repositories.get_environment(session, run.environment_name)
+    execution_profile = await repositories.get_execution_profile(session, environment.execution_profile_name)
+    provider = provider_factory.build_execution_provider(execution_profile)
+    return await provider.logs(provider_run.provider_run_id)

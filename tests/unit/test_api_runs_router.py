@@ -93,3 +93,96 @@ def test_list_run_events(monkeypatch):
 
     assert resp.status_code == 200
     assert [e["to_state"] for e in resp.json()] == ["ACCEPTED", "QUEUED"]
+
+
+def test_cancel_run_returns_202_when_pending(monkeypatch):
+    run = Run(
+        id=uuid.uuid4(),
+        workload_name="wordcount",
+        workload_version="0.1.0",
+        environment_name="k8s-remote",
+        state="CANCELING",
+    )
+    monkeypatch.setattr(run_service, "cancel_run", AsyncMock(return_value=(run, True)))
+
+    resp = client.delete(f"/v1/runs/{run.id}")
+
+    assert resp.status_code == 202
+    assert resp.json()["state"] == "CANCELING"
+
+
+def test_cancel_run_returns_200_when_already_final(monkeypatch):
+    run = Run(
+        id=uuid.uuid4(),
+        workload_name="wordcount",
+        workload_version="0.1.0",
+        environment_name="k8s-remote",
+        state="CANCELED",
+    )
+    monkeypatch.setattr(run_service, "cancel_run", AsyncMock(return_value=(run, False)))
+
+    resp = client.delete(f"/v1/runs/{run.id}")
+
+    assert resp.status_code == 200
+    assert resp.json()["state"] == "CANCELED"
+
+
+def test_cancel_run_not_found_returns_404(monkeypatch):
+    monkeypatch.setattr(
+        run_service, "cancel_run", AsyncMock(side_effect=repositories.NotFoundError("run 'x' not found"))
+    )
+
+    resp = client.delete(f"/v1/runs/{uuid.uuid4()}")
+
+    assert resp.status_code == 404
+
+
+def test_cancel_run_terminal_state_returns_409(monkeypatch):
+    monkeypatch.setattr(
+        run_service,
+        "cancel_run",
+        AsyncMock(side_effect=run_service.InvalidRunStateError("already terminal")),
+    )
+
+    resp = client.delete(f"/v1/runs/{uuid.uuid4()}")
+
+    assert resp.status_code == 409
+
+
+def test_get_run_logs_returns_reference(monkeypatch):
+    from control_plane.execution_provider import LogReference
+
+    monkeypatch.setattr(
+        run_service,
+        "get_run_logs",
+        AsyncMock(return_value=LogReference(description="driver pod logs", uri="kubectl logs ...")),
+    )
+
+    resp = client.get(f"/v1/runs/{uuid.uuid4()}/logs")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"description": "driver pod logs", "uri": "kubectl logs ..."}
+
+
+def test_get_run_logs_not_found_returns_404(monkeypatch):
+    monkeypatch.setattr(
+        run_service,
+        "get_run_logs",
+        AsyncMock(side_effect=repositories.NotFoundError("run 'x' not found")),
+    )
+
+    resp = client.get(f"/v1/runs/{uuid.uuid4()}/logs")
+
+    assert resp.status_code == 404
+
+
+def test_get_run_logs_not_submitted_returns_409(monkeypatch):
+    monkeypatch.setattr(
+        run_service,
+        "get_run_logs",
+        AsyncMock(side_effect=run_service.RunNotSubmittedError("not submitted yet")),
+    )
+
+    resp = client.get(f"/v1/runs/{uuid.uuid4()}/logs")
+
+    assert resp.status_code == 409

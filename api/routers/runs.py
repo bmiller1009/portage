@@ -3,7 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.schemas import RunCreate, RunEventOut, RunOut
+from api.schemas import RunCreate, RunEventOut, RunLogsOut, RunOut
 from control_plane import repositories, run_service
 from control_plane.db import get_db_session
 
@@ -48,3 +48,30 @@ async def get_run(run_id: uuid.UUID, session: AsyncSession = Depends(get_db_sess
 @router.get("/{run_id}/events", response_model=list[RunEventOut])
 async def list_run_events(run_id: uuid.UUID, session: AsyncSession = Depends(get_db_session)):
     return await run_service.list_run_events(session, run_id)
+
+
+@router.delete("/{run_id}", response_model=RunOut)
+async def cancel_run(
+    run_id: uuid.UUID, response: Response, session: AsyncSession = Depends(get_db_session)
+):
+    """Records cancellation intent — reconciler/service.py's cancel_runs()
+    is what actually calls the provider (see run_service.cancel_run)."""
+    try:
+        run, pending = await run_service.cancel_run(session, run_id)
+    except repositories.NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except run_service.InvalidRunStateError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+    response.status_code = 202 if pending else 200
+    return run
+
+
+@router.get("/{run_id}/logs", response_model=RunLogsOut)
+async def get_run_logs(run_id: uuid.UUID, session: AsyncSession = Depends(get_db_session)):
+    try:
+        return await run_service.get_run_logs(session, run_id)
+    except repositories.NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except run_service.RunNotSubmittedError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e

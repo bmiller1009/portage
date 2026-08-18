@@ -1,7 +1,8 @@
 """Builds a live ExecutionProvider (and a storage Spark config dict) from
 already-fetched, persisted ExecutionProfile/StorageProfile rows. Pure
-translation, no DB access — mirrors what cli/environments.py does from
-files/env vars, but for the reconciler's database-backed path instead.
+translation, no DB access — used by reconciler/service.py and
+control_plane/run_service.py (cancel/logs), the only two callers that ever
+turn persisted config into a live provider.
 """
 
 from typing import cast
