@@ -9,9 +9,10 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control_plane import provider_factory, repositories
-from control_plane.execution_provider import LogReference
+from control_plane.execution_provider import LogReference, ResolvedWorkload, ValidationResult
 from control_plane.models import Run
 from control_plane.run_state import TERMINAL_STATES, RunState
+from spec.workload.v1alpha1 import SparkWorkload
 
 
 class InvalidRunStateError(Exception):
@@ -94,6 +95,21 @@ async def cancel_run(session: AsyncSession, run_id: uuid.UUID) -> tuple[Run, boo
         return run, False
     await transition_run_state(session, run, RunState.CANCELING, message="cancellation requested")
     return run, True
+
+
+async def validate_workload(
+    session: AsyncSession, workload: SparkWorkload, environment_name: str
+) -> ValidationResult:
+    """Static, pre-submission capability check (spec §21) — resolves the
+    named environment to a live provider and calls its validate(), the same
+    call reconciler/service.py's submit_new_runs() makes right before
+    submitting, so a passing plane workload validate really does predict
+    what submission would do."""
+    environment = await repositories.get_environment(session, environment_name)
+    execution_profile = await repositories.get_execution_profile(session, environment.execution_profile_name)
+    provider = provider_factory.build_execution_provider(execution_profile)
+    resolved = ResolvedWorkload(workload=workload, dataset_config={}, environment_name=environment_name)
+    return await provider.validate(resolved)
 
 
 async def get_run_logs(session: AsyncSession, run_id: uuid.UUID) -> LogReference:

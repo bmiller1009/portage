@@ -8,6 +8,8 @@ import uuid
 
 from pydantic import BaseModel, ConfigDict
 
+from spec.workload.v1alpha1 import SparkWorkload
+
 
 class ExecutionProfileCreate(BaseModel):
     name: str
@@ -110,3 +112,13 @@ class RunLogsOut(BaseModel):
 
     description: str
     uri: str | None
+
+
+class ValidateRequest(BaseModel):
+    workload: SparkWorkload
+    environment_name: str
+
+
+class ValidateResponseOut(BaseModel):
+    valid: bool
+    errors: list[str]

@@ -14,6 +14,7 @@ from cli.main import cancel as plane_cancel
 from cli.main import logs as plane_logs
 from cli.main import run as plane_run
 from cli.main import status as plane_status
+from cli.main import workload_validate as plane_workload_validate
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
 RUN_ID = "11111111-1111-1111-1111-111111111111"
@@ -188,4 +189,48 @@ def test_logs_exits_nonzero_when_not_submitted(monkeypatch):
 
     with pytest.raises(typer.Exit) as exc_info:
         plane_logs(RUN_ID)
+    assert exc_info.value.exit_code == 1
+
+
+def test_workload_validate_without_environment_stays_local(monkeypatch):
+    """No --environment: pure schema check, zero network calls."""
+    fake_post = Mock()
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    plane_workload_validate(str(EXAMPLES_DIR / "wordcount.yaml"), environment=None)
+
+    fake_post.assert_not_called()
+
+
+def test_workload_validate_with_environment_posts_to_validate_endpoint(monkeypatch):
+    fake_post = Mock(return_value=FakeResponse(200, {"valid": True, "errors": []}))
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    plane_workload_validate(str(EXAMPLES_DIR / "wordcount.yaml"), environment="k8s-remote-v2")
+
+    fake_post.assert_called_once()
+    url, kwargs = fake_post.call_args[0][0], fake_post.call_args[1]
+    assert url.endswith("/v1/validate")
+    assert kwargs["json"]["environment_name"] == "k8s-remote-v2"
+
+
+def test_workload_validate_exits_nonzero_on_capability_mismatch(monkeypatch):
+    monkeypatch.setattr(
+        httpx,
+        "post",
+        Mock(return_value=FakeResponse(200, {"valid": False, "errors": ["workload requires GPU"]})),
+    )
+
+    with pytest.raises(typer.Exit) as exc_info:
+        plane_workload_validate(str(EXAMPLES_DIR / "wordcount.yaml"), environment="k8s-remote-v2")
+    assert exc_info.value.exit_code == 1
+
+
+def test_workload_validate_exits_nonzero_on_unknown_environment(monkeypatch):
+    monkeypatch.setattr(
+        httpx, "post", Mock(return_value=FakeResponse(422, {"detail": "environment 'ghost' not found"}))
+    )
+
+    with pytest.raises(typer.Exit) as exc_info:
+        plane_workload_validate(str(EXAMPLES_DIR / "wordcount.yaml"), environment="ghost")
     assert exc_info.value.exit_code == 1

@@ -57,6 +57,20 @@ class ExecutionPolicy(BaseModel):
     retries: int = 0
 
 
+class RequirementsSpec(BaseModel):
+    """Explicit capability requirements (spec §20-21) a provider must
+    support for this workload to be schedulable there — matched against a
+    provider's CapabilitySet by control_plane/execution_provider.py's
+    match_capabilities(). All default False: most workloads need none of
+    these, and existing workload definitions parse unchanged."""
+
+    dynamicAllocation: bool = False
+    gpu: bool = False
+    streaming: bool = False
+    localDisk: bool = False
+    sparkConnect: bool = False
+
+
 class SparkWorkload(BaseModel):
     apiVersion: Literal["runtime/v1alpha1"]
     kind: Literal["SparkWorkload"]
@@ -67,6 +81,7 @@ class SparkWorkload(BaseModel):
     datasets: DatasetsSpec
     resources: ResourcesSpec
     execution: ExecutionPolicy
+    requirements: RequirementsSpec = Field(default_factory=RequirementsSpec)
 
 
 def parse_workload(path: str | Path) -> SparkWorkload:

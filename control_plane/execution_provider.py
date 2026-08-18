@@ -75,3 +75,29 @@ class ExecutionProvider(Protocol):
     async def cancel(self, provider_run_id: str) -> None: ...
     async def logs(self, provider_run_id: str) -> LogReference: ...
     async def capabilities(self) -> CapabilitySet: ...
+
+
+def match_capabilities(workload: SparkWorkload, capabilities: CapabilitySet) -> list[str]:
+    """Fail-fast capability matching (spec §20-21) — shared by every
+    provider's validate() so the check happens exactly once, the same way,
+    whether it's driven by the reconciler before submission or by
+    POST /v1/validate before a run is ever created."""
+    errors: list[str] = []
+    if workload.runtime.spark not in capabilities.spark_versions:
+        errors.append(f"unsupported Spark version: {workload.runtime.spark}")
+
+    language = "jvm" if workload.application.type == "jvm-jar" else "python"
+    if language not in capabilities.languages:
+        errors.append(f"unsupported language: {language}")
+
+    for required, supported, label in [
+        (workload.requirements.dynamicAllocation, capabilities.dynamic_allocation, "dynamic allocation"),
+        (workload.requirements.gpu, capabilities.gpu, "GPU"),
+        (workload.requirements.streaming, capabilities.streaming, "streaming"),
+        (workload.requirements.localDisk, capabilities.local_disk, "local disk"),
+        (workload.requirements.sparkConnect, capabilities.spark_connect, "Spark Connect"),
+    ]:
+        if required and not supported:
+            errors.append(f"workload requires {label}, provider does not support it")
+
+    return errors

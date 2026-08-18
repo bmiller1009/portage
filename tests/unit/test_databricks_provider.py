@@ -167,6 +167,17 @@ def test_validate_rejects_unsupported_spark_version(profile, resolved_run):
     assert result.valid is False
 
 
+def test_validate_rejects_dynamic_allocation_requirement(profile, resolved_run):
+    """Databricks capabilities() declares dynamic_allocation=False."""
+    resolved_run.resolved.workload.requirements.dynamicAllocation = True
+    provider = DatabricksExecutionProvider(profile)
+
+    result = asyncio.run(provider.validate(resolved_run.resolved))
+
+    assert result.valid is False
+    assert any("dynamic allocation" in e for e in result.errors)
+
+
 def test_capabilities_reports_no_dynamic_allocation(profile):
     provider = DatabricksExecutionProvider(profile)
     caps = asyncio.run(provider.capabilities())

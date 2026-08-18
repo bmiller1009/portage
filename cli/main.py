@@ -52,14 +52,39 @@ def dataset_list(dataset_name: str = typer.Option(None, "--dataset")) -> None:
 
 
 @workload_app.command("validate")
-def workload_validate(file: str) -> None:
-    """Validate a portable workload definition against the v1alpha1 schema."""
+def workload_validate(
+    file: str, environment: str | None = typer.Option(None, "--environment")
+) -> None:
+    """Validate a portable workload definition against the v1alpha1 schema
+    (local, offline — no network call). With --environment, additionally
+    checks it against that environment's provider capabilities (spec §20-21)
+    via POST /v1/validate — the one REST call this otherwise-local command
+    makes, since capability matching needs the environment's registered
+    provider, which only the control plane knows about."""
     try:
         workload = parse_workload(file)
     except ValidationError as e:
         typer.echo(f"FAIL: {file} is not a valid workload\n{e}")
         raise typer.Exit(code=1) from e
     typer.echo(f"PASS: {file} ({workload.metadata.name}, spark {workload.runtime.spark})")
+
+    if environment is None:
+        return
+
+    resp = httpx.post(
+        f"{_api_base_url()}/v1/validate",
+        json={"workload": workload.model_dump(mode="json"), "environment_name": environment},
+    )
+    if resp.status_code == 422:
+        typer.echo(f"FAIL: {resp.json()['detail']}")
+        raise typer.Exit(code=1)
+    resp.raise_for_status()
+    result = resp.json()
+    if not result["valid"]:
+        for error in result["errors"]:
+            typer.echo(f"CAPABILITY MISMATCH: {error}")
+        raise typer.Exit(code=1)
+    typer.echo(f"PASS: compatible with environment '{environment}'")
 
 
 @app.command()

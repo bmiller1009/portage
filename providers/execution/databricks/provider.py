@@ -31,6 +31,7 @@ from control_plane.execution_provider import (
     ProviderStatus,
     RunRequest,
     ValidationResult,
+    match_capabilities,
 )
 from control_plane.run_state import RunState
 
@@ -114,9 +115,7 @@ class DatabricksExecutionProvider:
         self._client = client
 
     async def validate(self, workload) -> ValidationResult:
-        errors = []
-        if workload.workload.runtime.spark not in _SUPPORTED_SPARK_VERSIONS:
-            errors.append(f"unsupported Spark version: {workload.workload.runtime.spark}")
+        errors = match_capabilities(workload.workload, await self.capabilities())
         return ValidationResult(valid=not errors, errors=errors)
 
     def build_run_submission(self, run: RunRequest) -> dbx_jobs.SubmitTask:

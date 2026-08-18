@@ -204,6 +204,16 @@ def test_validate_rejects_unsupported_spark_version(profile, resolved_run):
     assert "unsupported Spark version" in result.errors[0]
 
 
+def test_validate_rejects_gpu_requirement(profile, resolved_run):
+    resolved_run.resolved.workload.requirements.gpu = True
+    provider = KubernetesExecutionProvider(profile, api_client=FakeCustomObjectsApi())
+
+    result = asyncio.run(provider.validate(resolved_run.resolved))
+
+    assert result.valid is False
+    assert any("GPU" in e for e in result.errors)
+
+
 def test_capabilities_declares_supported_spark_versions(profile):
     provider = KubernetesExecutionProvider(profile, api_client=FakeCustomObjectsApi())
     caps = asyncio.run(provider.capabilities())

@@ -29,6 +29,7 @@ from control_plane.execution_provider import (
     ProviderStatus,
     RunRequest,
     ValidationResult,
+    match_capabilities,
 )
 from control_plane.run_state import TERMINAL_STATES, RunState
 
@@ -150,9 +151,7 @@ class KubernetesExecutionProvider:
             self._api = cast(CustomObjectsApiLike, k8s_client.CustomObjectsApi())
 
     async def validate(self, workload) -> ValidationResult:
-        errors = []
-        if workload.workload.runtime.spark not in _SUPPORTED_SPARK_VERSIONS:
-            errors.append(f"unsupported Spark version: {workload.workload.runtime.spark}")
+        errors = match_capabilities(workload.workload, await self.capabilities())
         return ValidationResult(valid=not errors, errors=errors)
 
     def build_spark_application(self, run: RunRequest) -> dict:
