@@ -16,3 +16,4 @@ test:
 lint:
 	ruff check .
 	pyright
+	cd ui && npm run lint && npm run build
