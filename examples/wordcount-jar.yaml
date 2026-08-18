@@ -1,0 +1,36 @@
+apiVersion: runtime/v1alpha1
+kind: SparkWorkload
+
+metadata:
+  name: wordcount-jar
+  version: "0.1.0"
+
+runtime:
+  spark: "4.2"
+
+application:
+  type: jvm-jar
+  artifact: local:///opt/spark/examples/jars/spark-examples.jar
+  entryPoint: org.apache.spark.examples.SparkPi
+
+arguments:
+  - "2"
+
+datasets: {}
+
+resources:
+  driver:
+    cores: 1
+    memory: 2Gi
+
+  executor:
+    cores: 1
+    memory: 2Gi
+
+  scaling:
+    minExecutors: 1
+    maxExecutors: 2
+
+execution:
+  timeout: 30m
+  retries: 0

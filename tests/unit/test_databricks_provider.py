@@ -69,6 +69,13 @@ def resolved_run() -> RunRequest:
     return RunRequest(run_id="abc123", resolved=resolved)
 
 
+@pytest.fixture
+def resolved_jar_run() -> RunRequest:
+    workload = parse_workload(EXAMPLES_DIR / "wordcount-jar.yaml")
+    resolved = ResolvedWorkload(workload=workload, dataset_config={}, environment_name="databricks-mock")
+    return RunRequest(run_id="abc123", resolved=resolved)
+
+
 def test_build_run_submission_splits_entry_point_into_package_and_entry(profile, resolved_run):
     provider = DatabricksExecutionProvider(profile)
     task = provider.build_run_submission(resolved_run)
@@ -85,6 +92,26 @@ def test_build_run_submission_splits_entry_point_into_package_and_entry(profile,
     )
     assert task.libraries is not None
     assert task.libraries[0].whl == "artifact://wordcount/0.1.0"
+
+
+def test_build_run_submission_jar_shape(profile, resolved_jar_run):
+    provider = DatabricksExecutionProvider(profile)
+    task = provider.build_run_submission(resolved_jar_run)
+
+    assert task.spark_jar_task is not None
+    assert task.spark_jar_task.main_class_name == "org.apache.spark.examples.SparkPi"
+    assert task.spark_jar_task.parameters == ["2"]
+    assert task.python_wheel_task is None
+    assert task.libraries is not None
+    assert task.libraries[0].jar == "local:///opt/spark/examples/jars/spark-examples.jar"
+
+
+def test_validate_accepts_jvm_jar(profile, resolved_jar_run):
+    provider = DatabricksExecutionProvider(profile)
+
+    result = asyncio.run(provider.validate(resolved_jar_run.resolved))
+
+    assert result.valid is True
 
 
 def test_submit_calls_jobs_submit_and_returns_provider_run(profile, resolved_run):

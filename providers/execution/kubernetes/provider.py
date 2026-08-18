@@ -6,6 +6,13 @@ against operator chart 1.8.0 / app version 1.0.0 during Phase 0 bring-up,
 see docs/providers/kubernetes.md) and submits it via the official
 Kubernetes Python client. The operator owns all pod scheduling; this
 provider only ever creates/reads/deletes one custom resource per run.
+
+python-wheel goes through pyFiles + the generic launcher (see LAUNCHER_PATH
+below); jvm-jar goes through mainClass + jars directly — both confirmed
+present on the live CRD (`kubectl get crd sparkapplications.spark.apache.org
+-o json`), unlike mainApplicationFile, which isn't. JVM doesn't need the
+launcher indirection Python needs, since spark-submit's --class fixes the
+entry point at JVM startup rather than requiring a dynamic import trick.
 """
 
 import asyncio
@@ -146,11 +153,6 @@ class KubernetesExecutionProvider:
         errors = []
         if workload.workload.runtime.spark not in _SUPPORTED_SPARK_VERSIONS:
             errors.append(f"unsupported Spark version: {workload.workload.runtime.spark}")
-        if workload.workload.application.type != "python-wheel":
-            errors.append(
-                "Kubernetes provider prototype only supports python-wheel artifacts, "
-                f"got {workload.workload.application.type}"
-            )
         return ValidationResult(valid=not errors, errors=errors)
 
     def build_spark_application(self, run: RunRequest) -> dict:
@@ -175,13 +177,29 @@ class KubernetesExecutionProvider:
             **run.resolved.dataset_config,
         }
 
+        # jvm-jar dispatches straight through mainClass/jars (both confirmed
+        # present on the live spark.apache.org/v1 CRD, unlike
+        # mainApplicationFile which isn't) — no generic-launcher indirection
+        # needed, since --class fixes the entry point at JVM startup, unlike
+        # Python's dynamic-import launcher trick.
+        if workload.application.type == "jvm-jar":
+            artifact_spec = {
+                "mainClass": workload.application.entryPoint,
+                "jars": workload.application.artifact,
+                "driverArgs": list(workload.arguments),
+            }
+        else:
+            artifact_spec = {
+                "pyFiles": LAUNCHER_PATH,
+                "driverArgs": [workload.application.entryPoint, *workload.arguments],
+            }
+
         return {
             "apiVersion": f"{SPARK_APPLICATION_GROUP}/{SPARK_APPLICATION_VERSION}",
             "kind": "SparkApplication",
             "metadata": {"name": run_name, "namespace": self.profile.namespace},
             "spec": {
-                "pyFiles": LAUNCHER_PATH,
-                "driverArgs": [workload.application.entryPoint, *workload.arguments],
+                **artifact_spec,
                 "sparkConf": spark_conf,
                 "runtimeVersions": {"sparkVersion": f"{workload.runtime.spark}.0"},
             },
@@ -234,11 +252,16 @@ class KubernetesExecutionProvider:
         )
 
     async def logs(self, provider_run_id: str) -> LogReference:
+        # The label is spark.operator/spark-app-name (this operator's own
+        # namespace), not spark.apache.org/app-name (the CRD's own API
+        # group) — confirmed live via `kubectl get pod --show-labels` against
+        # a running driver pod; the two are easy to conflate but only one
+        # actually appears on the pod.
         return LogReference(
             description="driver pod logs via kubectl",
             uri=(
                 f"kubectl logs -n {self.profile.namespace} "
-                f"-l spark.apache.org/app-name={provider_run_id}"
+                f"-l spark.operator/spark-app-name={provider_run_id}"
             ),
         )
 

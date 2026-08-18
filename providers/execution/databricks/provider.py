@@ -6,13 +6,16 @@ available during Phase 0, so this is tested against a fake WorkspaceClient
 submission is future work once workspace credentials exist.
 
 Translates a resolved workload into a Jobs API 2.2 one-time-run submission
-(`jobs.submit`) using a python_wheel_task, per spec §16's guidance to prefer
-wheel/JAR tasks over notebooks. The wheel task's `package_name`/`entry_point`
-are derived from the workload's dotted entryPoint ("wordcount.jobs.count" ->
-package "wordcount", entry point "count") — the example wheel under
+(`jobs.submit`) using a python_wheel_task or spark_jar_task depending on
+`application.type` (spec §16's guidance to prefer wheel/JAR tasks over
+notebooks). The wheel task's `package_name`/`entry_point` are derived from
+the workload's dotted entryPoint ("wordcount.jobs.count" -> package
+"wordcount", entry point "count") — the example wheel under
 examples/wordcount_app registers a matching console_scripts entry point so
 the same artifact is invocable by both providers (see examples/wordcount_app/
 pyproject.toml and providers/execution/kubernetes/provider.py's launcher).
+The jar task's entryPoint is used directly as `main_class_name` — no
+splitting needed, since a JVM main class isn't a console_scripts entry point.
 """
 
 from dataclasses import dataclass
@@ -114,38 +117,46 @@ class DatabricksExecutionProvider:
         errors = []
         if workload.workload.runtime.spark not in _SUPPORTED_SPARK_VERSIONS:
             errors.append(f"unsupported Spark version: {workload.workload.runtime.spark}")
-        if workload.workload.application.type != "python-wheel":
-            errors.append(
-                "Databricks provider prototype only supports python-wheel artifacts, "
-                f"got {workload.workload.application.type}"
-            )
         return ValidationResult(valid=not errors, errors=errors)
 
     def build_run_submission(self, run: RunRequest) -> dbx_jobs.SubmitTask:
         """Pure translation function — resolved workload -> Jobs API 2.2
         one-time-run submission payload. No I/O, directly unit-testable."""
         workload = run.resolved.workload
-        package_name, entry_point_name = _split_entry_point(workload.application.entryPoint)
         cluster_spark_version = _SPARK_TO_DBR_CLUSTER_VERSION.get(
             workload.runtime.spark, workload.runtime.spark
         )
 
         spark_conf = {**run.resolved.storage_config, **run.resolved.dataset_config}
 
+        if workload.application.type == "jvm-jar":
+            task_kwargs = {
+                "spark_jar_task": dbx_jobs.SparkJarTask(
+                    main_class_name=workload.application.entryPoint,
+                    parameters=list(workload.arguments),
+                ),
+                "libraries": [dbx_compute.Library(jar=workload.application.artifact)],
+            }
+        else:
+            package_name, entry_point_name = _split_entry_point(workload.application.entryPoint)
+            task_kwargs = {
+                "python_wheel_task": dbx_jobs.PythonWheelTask(
+                    package_name=package_name,
+                    entry_point=entry_point_name,
+                    parameters=list(workload.arguments),
+                ),
+                "libraries": [dbx_compute.Library(whl=workload.application.artifact)],
+            }
+
         return dbx_jobs.SubmitTask(
             task_key="main",
-            python_wheel_task=dbx_jobs.PythonWheelTask(
-                package_name=package_name,
-                entry_point=entry_point_name,
-                parameters=list(workload.arguments),
-            ),
-            libraries=[dbx_compute.Library(whl=workload.application.artifact)],
             new_cluster=dbx_compute.ClusterSpec(
                 spark_version=cluster_spark_version,
                 node_type_id=self.profile.cluster_node_type_id,
                 num_workers=self.profile.num_workers,
                 spark_conf=spark_conf,
             ),
+            **task_kwargs,
         )
 
     async def submit(self, run: RunRequest) -> ProviderRun:

@@ -54,6 +54,13 @@ def resolved_run() -> RunRequest:
     return RunRequest(run_id="abc123", resolved=resolved)
 
 
+@pytest.fixture
+def resolved_jar_run() -> RunRequest:
+    workload = parse_workload(EXAMPLES_DIR / "wordcount-jar.yaml")
+    resolved = ResolvedWorkload(workload=workload, dataset_config={}, environment_name="k8s-remote")
+    return RunRequest(run_id="abc123", resolved=resolved)
+
+
 def test_build_spark_application_shape(profile, resolved_run):
     provider = KubernetesExecutionProvider(profile, api_client=FakeCustomObjectsApi())
     manifest = provider.build_spark_application(resolved_run)
@@ -70,6 +77,25 @@ def test_build_spark_application_shape(profile, resolved_run):
         spec["sparkConf"]["spark.portable.dataset.wordcount.raw.uri"]
         == "s3a://portage-phase0/wordcount/input.txt"
     )
+
+
+def test_build_spark_application_jar_shape(profile, resolved_jar_run):
+    provider = KubernetesExecutionProvider(profile, api_client=FakeCustomObjectsApi())
+    manifest = provider.build_spark_application(resolved_jar_run)
+
+    spec = manifest["spec"]
+    assert spec["mainClass"] == "org.apache.spark.examples.SparkPi"
+    assert spec["jars"] == "local:///opt/spark/examples/jars/spark-examples.jar"
+    assert spec["driverArgs"] == ["2"]
+    assert "pyFiles" not in spec
+
+
+def test_validate_accepts_jvm_jar(profile, resolved_jar_run):
+    provider = KubernetesExecutionProvider(profile, api_client=FakeCustomObjectsApi())
+
+    result = asyncio.run(provider.validate(resolved_jar_run.resolved))
+
+    assert result.valid is True
 
 
 def test_submit_creates_custom_object_and_returns_provider_run(profile, resolved_run):
@@ -154,6 +180,18 @@ def test_cancel_deletes_custom_object(profile):
     asyncio.run(provider.cancel("wordcount-abc123"))
 
     assert fake_api.deleted_name == "wordcount-abc123"
+
+
+def test_logs_references_correct_pod_label(profile):
+    """Confirmed live via `kubectl get pod --show-labels` against a real
+    driver pod: the operator labels it spark.operator/spark-app-name, not
+    spark.apache.org/app-name — using the wrong one silently returns no
+    logs (a real bug, caught only by running against a live cluster)."""
+    provider = KubernetesExecutionProvider(profile, api_client=FakeCustomObjectsApi())
+
+    ref = asyncio.run(provider.logs("wordcount-abc123"))
+
+    assert ref.uri == "kubectl logs -n default -l spark.operator/spark-app-name=wordcount-abc123"
 
 
 def test_validate_rejects_unsupported_spark_version(profile, resolved_run):
