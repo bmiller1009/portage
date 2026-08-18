@@ -1,0 +1,74 @@
+# Apache Kyuubi (docs/architecture/spec.md §38/§68 — explicitly optional
+# there; built and deployed anyway per project decision), namespace
+# portage-query alongside Trino (deploy/dev/trino.yaml). Uses the custom
+# image built from providers/query/kyuubi/image/ — no official prebuilt
+# Kyuubi+Spark image exists, same reasoning as that Dockerfile's own
+# comment.
+#
+# kyuubi-defaults.conf is mounted from a ConfigMap (default content
+# mirrors what's baked into the image, providers/query/kyuubi/image/
+# kyuubi-defaults.conf) rather than relying solely on the image's own
+# copy — same pattern as Trino's iceberg.properties (deploy/dev/
+# trino.yaml) — so endpoint/credentials/warehouse can be overridden per
+# deployment without rebuilding the image.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kyuubi-defaults
+  namespace: portage-query
+data:
+  kyuubi-defaults.conf: |
+    spark.master                                            local[*]
+    kyuubi.frontend.bind.host                               0.0.0.0
+    spark.sql.extensions                                    org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions
+    spark.sql.catalog.portage_iceberg                       org.apache.iceberg.spark.SparkCatalog
+    spark.sql.catalog.portage_iceberg.type                  rest
+    spark.sql.catalog.portage_iceberg.uri                   http://iceberg-rest.portage-storage.svc.cluster.local:8181
+    spark.sql.catalog.portage_iceberg.warehouse             s3a://portage-local/iceberg-warehouse
+    spark.sql.catalog.portage_iceberg.client.region         us-east-1
+    spark.sql.catalog.portage_iceberg.s3.endpoint           http://minio.portage-storage.svc.cluster.local:9000
+    spark.sql.catalog.portage_iceberg.s3.access-key-id      portage-dev
+    spark.sql.catalog.portage_iceberg.s3.secret-access-key  portage-dev-secret
+    spark.sql.catalog.portage_iceberg.s3.path-style-access  true
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kyuubi
+  namespace: portage-query
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kyuubi
+  template:
+    metadata:
+      labels:
+        app: kyuubi
+    spec:
+      containers:
+        - name: kyuubi
+          image: portage/kyuubi:0.1.0
+          ports:
+            - containerPort: 10009
+          volumeMounts:
+            - name: kyuubi-defaults
+              mountPath: /opt/kyuubi/conf/kyuubi-defaults.conf
+              subPath: kyuubi-defaults.conf
+      volumes:
+        - name: kyuubi-defaults
+          configMap:
+            name: kyuubi-defaults
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kyuubi
+  namespace: portage-query
+spec:
+  selector:
+    app: kyuubi
+  ports:
+    - name: jdbc
+      port: 10009
+      targetPort: 10009

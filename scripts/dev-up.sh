@@ -105,6 +105,13 @@ log "Trino"
 kubectl --context "$KUBE_CONTEXT" apply -f deploy/dev/trino.yaml
 kubectl --context "$KUBE_CONTEXT" -n portage-query rollout status deployment/trino --timeout=120s
 
+# --- 4d. Kyuubi -----------------------------------------------------------------
+log "Kyuubi image + deployment"
+docker build -t portage/kyuubi:0.1.0 -f providers/query/kyuubi/image/Dockerfile providers/query/kyuubi/image
+kind load docker-image portage/kyuubi:0.1.0 --name "$CLUSTER_NAME"
+kubectl --context "$KUBE_CONTEXT" apply -f deploy/dev/kyuubi.yaml
+kubectl --context "$KUBE_CONTEXT" -n portage-query rollout status deployment/kyuubi --timeout=180s
+
 # --- 5. PostgreSQL --------------------------------------------------------------
 log "PostgreSQL ($POSTGRES_CONTAINER on :$POSTGRES_PORT)"
 if docker ps --format '{{.Names}}' | grep -qx "$POSTGRES_CONTAINER"; then
