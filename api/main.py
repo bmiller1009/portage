@@ -21,6 +21,7 @@ from prometheus_client import CONTENT_TYPE_LATEST
 from api.routers import (
     artifacts,
     audit,
+    conformance,
     datasets,
     environments,
     execution_profiles,
@@ -54,6 +55,7 @@ app.include_router(runs.router)
 app.include_router(validate.router)
 app.include_router(audit.router)
 app.include_router(providers.router)
+app.include_router(conformance.router)
 
 
 def _route_path(request: Request) -> str:

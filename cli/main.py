@@ -22,6 +22,8 @@ environment_app = typer.Typer(no_args_is_help=True)
 app.add_typer(environment_app, name="environment")
 dataset_app = typer.Typer(no_args_is_help=True)
 app.add_typer(dataset_app, name="dataset")
+conformance_app = typer.Typer(no_args_is_help=True)
+app.add_typer(conformance_app, name="conformance")
 
 
 def _api_base_url() -> str:
@@ -145,6 +147,77 @@ def run(
 
     typer.echo("TIMED OUT waiting for terminal state")
     raise typer.Exit(code=1)
+
+
+@conformance_app.command("test")
+def conformance_test(
+    workload_file: str,
+    environment: list[str] = typer.Option(..., "--environment"),
+    output: str | None = typer.Option(None, "--output"),
+    timeout_seconds: int = typer.Option(600, "--timeout"),
+    poll_interval_seconds: float = typer.Option(5, "--poll-interval"),
+) -> None:
+    """Dynamic conformance test (spec §21): submits the SAME workload to
+    every named environment, polls each to a terminal state, then
+    compares their outputs semantically (spec §22) via
+    POST /v1/conformance/compare — the actual comparison happens
+    server-side, since it needs storage credentials this CLI never
+    touches directly (spec §31). Reports PASS/FAIL/BLOCKED per
+    environment pair; exits 1 unless every pair PASSes."""
+    workload = parse_workload(workload_file)
+    base_url = _api_base_url()
+
+    register_resp = httpx.post(f"{base_url}/v1/workloads", json=workload.model_dump(mode="json"))
+    if register_resp.status_code not in (201, 409):
+        register_resp.raise_for_status()
+
+    run_ids: dict[str, str] = {}
+    for env_name in environment:
+        create_resp = httpx.post(
+            f"{base_url}/v1/runs",
+            json={
+                "workload_name": workload.metadata.name,
+                "workload_version": workload.metadata.version,
+                "environment_name": env_name,
+            },
+            headers={"Idempotency-Key": uuid.uuid4().hex},
+        )
+        create_resp.raise_for_status()
+        run_ids[env_name] = create_resp.json()["id"]
+        typer.echo(f"{env_name}: submitted run_id={run_ids[env_name]}")
+
+    deadline = time.monotonic() + timeout_seconds
+    pending = dict(run_ids)
+    while pending and time.monotonic() < deadline:
+        for env_name, run_id in list(pending.items()):
+            status_resp = httpx.get(f"{base_url}/v1/runs/{run_id}")
+            status_resp.raise_for_status()
+            run_state = status_resp.json()["state"]
+            if RunState(run_state) in TERMINAL_STATES:
+                typer.echo(f"{env_name}: {run_state}")
+                del pending[env_name]
+        if pending:
+            time.sleep(poll_interval_seconds)
+    for env_name in pending:
+        typer.echo(f"{env_name}: TIMED OUT waiting for terminal state")
+
+    compare_resp = httpx.post(
+        f"{base_url}/v1/conformance/compare",
+        json={"run_ids": list(run_ids.values()), "output_name": output},
+    )
+    compare_resp.raise_for_status()
+    report = compare_resp.json()
+
+    any_failed = False
+    for pair in report["results"]:
+        typer.echo(f"{pair['left_environment']} <-> {pair['right_environment']}: {pair['status']}")
+        if pair["status"] != "PASS":
+            any_failed = True
+            for mismatch in pair["mismatches"]:
+                typer.echo(f"  {mismatch}")
+
+    if any_failed:
+        raise typer.Exit(code=1)
 
 
 @app.command()

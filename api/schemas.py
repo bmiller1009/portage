@@ -173,3 +173,23 @@ class ValidateRequest(BaseModel):
 class ValidateResponseOut(BaseModel):
     valid: bool
     errors: list[str]
+
+
+class ConformanceCompareRequest(BaseModel):
+    run_ids: list[uuid.UUID]
+    output_name: str | None = None
+
+
+class ConformancePairResultOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    left_environment: str
+    right_environment: str
+    status: str
+    mismatches: list[str]
+
+
+class ConformanceReportOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    results: list[ConformancePairResultOut]
