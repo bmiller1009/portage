@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # make dev (docs/architecture/spec.md §45): stands up kind + PostgreSQL +
-# MinIO + Spark Operator + the control plane, then seeds a "local"
-# environment so `plane run examples/wordcount.yaml --environment local`
-# works with zero cloud accounts. Every step checks-before-acting so a
-# re-run after a partial failure doesn't error out or duplicate resources.
+# MinIO + Spark Operator + Iceberg REST Catalog + Trino + Kyuubi + the
+# control plane, then seeds a "local" environment so
+# `plane run examples/wordcount.yaml --environment local` works with zero
+# cloud accounts. Every step checks-before-acting so a re-run after a
+# partial failure doesn't error out or duplicate resources.
 #
 # Every command/manifest here was first run by hand against a real cluster
 # during Phase 0/v0.1 development (docs/providers/kubernetes.md,
