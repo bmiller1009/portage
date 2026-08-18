@@ -139,6 +139,19 @@ class RunLogsOut(BaseModel):
     uri: str | None
 
 
+class AuditEventOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    identity: str
+    action: str
+    resource: str
+    environment_name: str | None
+    result: str
+    source: str
+    correlation_id: str
+    created_at: datetime | None = None
+
+
 class ProviderOut(BaseModel):
     name: str
     kind: Literal["execution", "storage"]

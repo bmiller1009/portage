@@ -11,13 +11,9 @@ from control_plane.db import get_db_session
 from control_plane.execution_provider import CapabilitySet
 from control_plane.models import ExecutionProfile, StorageProfile
 from control_plane.storage_provider import StorageCapabilitySet
+from tests.unit.conftest import fake_session
 
-
-async def _fake_session():
-    yield None
-
-
-app.dependency_overrides[get_db_session] = _fake_session
+app.dependency_overrides[get_db_session] = fake_session
 client = TestClient(app)
 
 

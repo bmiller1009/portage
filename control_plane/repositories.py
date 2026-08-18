@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from control_plane.models import (
     ArtifactBinding,
+    AuditEvent,
     DatasetBinding,
     Environment,
     ExecutionProfile,
@@ -538,3 +539,51 @@ async def create_idempotency_key(session: AsyncSession, *, key: str, run_id: uui
     await session.commit()
     await session.refresh(record)
     return record
+
+
+async def create_audit_event(
+    session: AsyncSession,
+    *,
+    identity: str,
+    action: str,
+    resource: str,
+    environment_name: str | None,
+    result: str,
+    source: str,
+    correlation_id: str,
+) -> AuditEvent:
+    event = AuditEvent(
+        identity=identity,
+        action=action,
+        resource=resource,
+        environment_name=environment_name,
+        result=result,
+        source=source,
+        correlation_id=correlation_id,
+    )
+    session.add(event)
+    await session.commit()
+    await session.refresh(event)
+    return event
+
+
+async def list_audit_events(
+    session: AsyncSession,
+    *,
+    resource: str | None = None,
+    environment_name: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: int = 100,
+) -> list[AuditEvent]:
+    query = select(AuditEvent)
+    if resource is not None:
+        query = query.where(AuditEvent.resource == resource)
+    if environment_name is not None:
+        query = query.where(AuditEvent.environment_name == environment_name)
+    if since is not None:
+        query = query.where(AuditEvent.created_at >= since)
+    if until is not None:
+        query = query.where(AuditEvent.created_at <= until)
+    result = await session.execute(query.order_by(AuditEvent.created_at.desc()).limit(limit))
+    return list(result.scalars().all())

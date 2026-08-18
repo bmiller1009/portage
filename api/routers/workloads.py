@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import ROLE_DEVELOPER, ROLE_VIEWER, Identity, require_role
 from api.schemas import WorkloadDefinitionOut
-from control_plane import repositories
+from control_plane import audit, repositories
 from control_plane.db import get_db_session
 from spec.workload.v1alpha1 import SparkWorkload
 
@@ -18,15 +18,39 @@ async def create_workload(
 ):
     """The request body is a portable workload definition (spec §7) — FastAPI
     validates it against SparkWorkload before this handler ever runs."""
+    resource = f"{body.metadata.name}/{body.metadata.version}"
     try:
-        return await repositories.create_workload_definition(
+        workload = await repositories.create_workload_definition(
             session,
             name=body.metadata.name,
             version=body.metadata.version,
             definition=body.model_dump(),
         )
     except repositories.AlreadyExistsError as e:
+        await audit.record_audit_event(
+            session,
+            identity=identity.email or identity.subject,
+            action="WORKLOAD_REGISTER",
+            resource=resource,
+            environment_name=None,
+            result=audit.RESULT_FAILURE,
+            source=identity.source,
+        )
         raise HTTPException(status_code=409, detail=str(e)) from e
+
+    await audit.record_audit_event(
+        session,
+        identity=identity.email or identity.subject,
+        action="WORKLOAD_REGISTER",
+        resource=resource,
+        environment_name=None,
+        result=audit.RESULT_SUCCESS,
+        source=identity.source,
+    )
+    # record_audit_event() commits, which expires `workload` — see
+    # api/routers/runs.py's create_run() for the full explanation.
+    await session.refresh(workload)
+    return workload
 
 
 @router.get("", response_model=list[WorkloadDefinitionOut])

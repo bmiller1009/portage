@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import ROLE_OPERATOR, ROLE_VIEWER, Identity, require_role
 from api.schemas import EnvironmentCreate, EnvironmentOut
-from control_plane import repositories
+from control_plane import audit, repositories
 from control_plane.db import get_db_session
 
 router = APIRouter(prefix="/v1/environments", tags=["environments"])
@@ -16,7 +16,7 @@ async def create_environment(
     identity: Identity = Depends(require_role(ROLE_OPERATOR)),
 ):
     try:
-        return await repositories.create_environment(
+        environment = await repositories.create_environment(
             session,
             name=body.name,
             execution_provider=body.execution_provider,
@@ -25,9 +25,41 @@ async def create_environment(
             storage_profile_name=body.storage_profile_name,
         )
     except repositories.AlreadyExistsError as e:
+        await audit.record_audit_event(
+            session,
+            identity=identity.email or identity.subject,
+            action="ENVIRONMENT_CREATE",
+            resource=body.name,
+            environment_name=body.name,
+            result=audit.RESULT_FAILURE,
+            source=identity.source,
+        )
         raise HTTPException(status_code=409, detail=str(e)) from e
     except repositories.NotFoundError as e:
+        await audit.record_audit_event(
+            session,
+            identity=identity.email or identity.subject,
+            action="ENVIRONMENT_CREATE",
+            resource=body.name,
+            environment_name=body.name,
+            result=audit.RESULT_FAILURE,
+            source=identity.source,
+        )
         raise HTTPException(status_code=422, detail=str(e)) from e
+
+    await audit.record_audit_event(
+        session,
+        identity=identity.email or identity.subject,
+        action="ENVIRONMENT_CREATE",
+        resource=environment.name,
+        environment_name=environment.name,
+        result=audit.RESULT_SUCCESS,
+        source=identity.source,
+    )
+    # record_audit_event() commits, which expires `environment` — see
+    # api/routers/runs.py's create_run() for the full explanation.
+    await session.refresh(environment)
+    return environment
 
 
 @router.get("", response_model=list[EnvironmentOut])

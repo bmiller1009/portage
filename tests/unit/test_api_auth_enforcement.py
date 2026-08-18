@@ -16,20 +16,17 @@ from jwt.algorithms import RSAAlgorithm
 
 from api import auth
 from api.main import app
-from control_plane import repositories
+from control_plane import audit, repositories
 from control_plane.db import get_db_session
 from control_plane.models import Environment
+from tests.unit.conftest import fake_session
 
 ISSUER = "https://test-idp.example.com/"
 AUDIENCE = "portage-api"
 KID = "enforcement-test-key"
 
 
-async def _fake_session():
-    yield None
-
-
-app.dependency_overrides[get_db_session] = _fake_session
+app.dependency_overrides[get_db_session] = fake_session
 client = TestClient(app)
 
 
@@ -51,6 +48,7 @@ def _wire_fake_jwks(keypair, monkeypatch):
             return signing_key
 
     monkeypatch.setattr(auth, "_jwk_client", lambda: FakeJWKClient())
+    monkeypatch.setattr(audit, "record_audit_event", AsyncMock())
     monkeypatch.setenv("PORTAGE_OIDC_JWKS_URI", "https://test-idp.example.com/jwks")
     monkeypatch.setenv("PORTAGE_OIDC_ISSUER", ISSUER)
     monkeypatch.setenv("PORTAGE_OIDC_AUDIENCE", AUDIENCE)

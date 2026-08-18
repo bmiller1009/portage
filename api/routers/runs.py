@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import ROLE_DEVELOPER, ROLE_OPERATOR, ROLE_VIEWER, Identity, require_role
 from api.schemas import RunCreate, RunEventOut, RunLogsOut, RunOut
-from control_plane import repositories, run_service
+from control_plane import audit, repositories, run_service
 from control_plane.db import get_db_session
 
 router = APIRouter(prefix="/v1/runs", tags=["runs"])
@@ -33,8 +33,33 @@ async def create_run(
             idempotency_key=idempotency_key,
         )
     except repositories.NotFoundError as e:
+        await audit.record_audit_event(
+            session,
+            identity=identity.email or identity.subject,
+            action="RUN_SUBMIT",
+            resource=f"{body.workload_name}/{body.workload_version or 'latest'}",
+            environment_name=body.environment_name,
+            result=audit.RESULT_FAILURE,
+            source=identity.source,
+        )
         raise HTTPException(status_code=422, detail=str(e)) from e
 
+    await audit.record_audit_event(
+        session,
+        identity=identity.email or identity.subject,
+        action="RUN_SUBMIT",
+        resource=str(run.id),
+        environment_name=run.environment_name,
+        result=audit.RESULT_SUCCESS,
+        source=identity.source,
+    )
+    # record_audit_event() commits, which expires every object still
+    # attached to this session (SQLAlchemy's default expire_on_commit) —
+    # including `run`, about to be serialized into the response. Refresh
+    # it or FastAPI's response serialization hits a real MissingGreenlet
+    # error trying to lazily reload an expired attribute outside the
+    # async context (confirmed live, not a hypothetical).
+    await session.refresh(run)
     response.status_code = 202 if created else 200
     return run
 
@@ -81,10 +106,40 @@ async def cancel_run(
     try:
         run, pending = await run_service.cancel_run(session, run_id)
     except repositories.NotFoundError as e:
+        await audit.record_audit_event(
+            session,
+            identity=identity.email or identity.subject,
+            action="RUN_CANCEL",
+            resource=str(run_id),
+            environment_name=None,
+            result=audit.RESULT_FAILURE,
+            source=identity.source,
+        )
         raise HTTPException(status_code=404, detail=str(e)) from e
     except run_service.InvalidRunStateError as e:
+        await audit.record_audit_event(
+            session,
+            identity=identity.email or identity.subject,
+            action="RUN_CANCEL",
+            resource=str(run_id),
+            environment_name=None,
+            result=audit.RESULT_FAILURE,
+            source=identity.source,
+        )
         raise HTTPException(status_code=409, detail=str(e)) from e
 
+    await audit.record_audit_event(
+        session,
+        identity=identity.email or identity.subject,
+        action="RUN_CANCEL",
+        resource=str(run.id),
+        environment_name=run.environment_name,
+        result=audit.RESULT_SUCCESS,
+        source=identity.source,
+    )
+    # See create_run()'s comment: record_audit_event() commits and expires
+    # `run`, which is about to be serialized into the response.
+    await session.refresh(run)
     response.status_code = 202 if pending else 200
     return run
 

@@ -1,7 +1,8 @@
 """SQLAlchemy models for the persistence layer (docs/architecture/spec.md
 §27): config/definition CRUD (Environment/ExecutionProfile/StorageProfile/
 DatasetBinding/WorkloadDefinition) plus run lifecycle persistence
-(Run/ProviderRun/RunEvent/IdempotencyKey).
+(Run/ProviderRun/RunEvent/IdempotencyKey) plus the identity-bearing
+privileged-action audit trail (AuditEvent, spec §36).
 """
 
 import uuid
@@ -180,3 +181,25 @@ class IdempotencyKey(Base):
     key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AuditEvent(Base):
+    """Every privileged operation (spec §36) — deliberately separate from
+    RunEvent, which is a run's own state-transition log, not a general
+    identity-bearing audit trail across every kind of privileged action."""
+
+    __tablename__ = "audit_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    # The caller's subject (email if the token has one, else sub) — never
+    # a raw token or any other credential material.
+    identity: Mapped[str] = mapped_column(String(255), index=True)
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    resource: Mapped[str] = mapped_column(String(512))
+    environment_name: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    result: Mapped[str] = mapped_column(String(32))
+    # api.auth.Identity.source ("oidc" or "unauthenticated" when
+    # PORTAGE_AUTH_MODE=disabled) — never fabricated.
+    source: Mapped[str] = mapped_column(String(32))
+    correlation_id: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)

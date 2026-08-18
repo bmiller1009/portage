@@ -20,6 +20,7 @@ from prometheus_client import CONTENT_TYPE_LATEST
 
 from api.routers import (
     artifacts,
+    audit,
     datasets,
     environments,
     execution_profiles,
@@ -35,9 +36,10 @@ app = FastAPI(title="Portage Control Plane")
 
 # ui/ (spec §32) is a separate Vite dev server on its own port, so it's a
 # cross-origin caller of this API by construction — allowing all origins
-# is a dev-only stance (no cookies/credentials are ever sent, spec §33's
-# auth model doesn't exist yet either), not something to carry into a
-# real deployment unreviewed.
+# is a dev-only stance (no cookies/credentials are ever sent) — auth
+# itself is real (api/auth.py, spec §33) but its own enforcement is
+# opt-in (PORTAGE_AUTH_MODE), so this stays permissive by default too,
+# not something to carry into a real deployment unreviewed.
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
@@ -50,6 +52,7 @@ app.include_router(artifacts.router)
 app.include_router(workloads.router)
 app.include_router(runs.router)
 app.include_router(validate.router)
+app.include_router(audit.router)
 app.include_router(providers.router)
 
 

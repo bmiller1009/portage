@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import ROLE_OPERATOR, ROLE_VIEWER, Identity, require_role
 from api.schemas import StorageProfileCreate, StorageProfileOut
-from control_plane import repositories
+from control_plane import audit, repositories
 from control_plane.db import get_db_session
 
 router = APIRouter(prefix="/v1/storage-profiles", tags=["storage-profiles"])
@@ -16,7 +16,7 @@ async def create_storage_profile(
     identity: Identity = Depends(require_role(ROLE_OPERATOR)),
 ):
     try:
-        return await repositories.create_storage_profile(
+        profile = await repositories.create_storage_profile(
             session,
             name=body.name,
             provider=body.provider,
@@ -24,7 +24,30 @@ async def create_storage_profile(
             credential_reference=body.credential_reference,
         )
     except repositories.AlreadyExistsError as e:
+        await audit.record_audit_event(
+            session,
+            identity=identity.email or identity.subject,
+            action="STORAGE_PROFILE_CREATE",
+            resource=body.name,
+            environment_name=None,
+            result=audit.RESULT_FAILURE,
+            source=identity.source,
+        )
         raise HTTPException(status_code=409, detail=str(e)) from e
+
+    await audit.record_audit_event(
+        session,
+        identity=identity.email or identity.subject,
+        action="STORAGE_PROFILE_CREATE",
+        resource=profile.name,
+        environment_name=None,
+        result=audit.RESULT_SUCCESS,
+        source=identity.source,
+    )
+    # record_audit_event() commits, which expires `profile` — see
+    # api/routers/runs.py's create_run() for the full explanation.
+    await session.refresh(profile)
+    return profile
 
 
 @router.get("", response_model=list[StorageProfileOut])

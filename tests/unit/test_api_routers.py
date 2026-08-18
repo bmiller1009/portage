@@ -8,22 +8,28 @@ errors and responses correctly)."""
 from pathlib import Path
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
-from control_plane import repositories
+from control_plane import audit, repositories
 from control_plane.db import get_db_session
 from control_plane.models import DatasetBinding, Environment, ExecutionProfile
+from tests.unit.conftest import fake_session
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
 
 
-async def _fake_session():
-    yield None
-
-
-app.dependency_overrides[get_db_session] = _fake_session
+app.dependency_overrides[get_db_session] = fake_session
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _no_op_audit(monkeypatch):
+    """This file's fake session (None, no real DB) can't back a real
+    AuditEvent write — these are router-wiring tests, not audit tests
+    (see tests/unit/test_api_audit_router.py for those)."""
+    monkeypatch.setattr(audit, "record_audit_event", AsyncMock())
 
 
 def test_create_execution_profile_success(monkeypatch):

@@ -12,15 +12,12 @@ from api.main import app
 from control_plane import repositories, run_service
 from control_plane.db import get_db_session
 from control_plane.execution_provider import ValidationResult
+from tests.unit.conftest import fake_session
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
 
 
-async def _fake_session():
-    yield None
-
-
-app.dependency_overrides[get_db_session] = _fake_session
+app.dependency_overrides[get_db_session] = fake_session
 client = TestClient(app)
 
 

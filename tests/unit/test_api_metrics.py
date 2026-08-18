@@ -10,13 +10,9 @@ from fastapi.testclient import TestClient
 from api.main import app
 from control_plane import metrics, repositories
 from control_plane.db import get_db_session
+from tests.unit.conftest import fake_session
 
-
-async def _fake_session():
-    yield None
-
-
-app.dependency_overrides[get_db_session] = _fake_session
+app.dependency_overrides[get_db_session] = fake_session
 client = TestClient(app)
 
 
