@@ -77,6 +77,38 @@ def test_build_spark_application_shape(profile, resolved_run):
     assert "executorSpec" not in spec
 
 
+def test_build_spark_application_applies_runtime_profile_node_selector(resolved_run):
+    profile = KubernetesProfile(
+        namespace="default",
+        service_account="spark",
+        image="portage/wordcount:0.1.0",
+        runtime_profiles={"high-memory": {"nodeSelector": {"workload-type": "memory-optimized"}}},
+    )
+    resolved_run.resolved.workload.runtime.profile = "high-memory"
+    provider = KubernetesExecutionProvider(profile, api_client=FakeCustomObjectsApi())
+
+    spec = provider.build_spark_application(resolved_run)["spec"]
+
+    assert spec["driverSpec"]["podTemplateSpec"]["spec"]["nodeSelector"] == {
+        "workload-type": "memory-optimized"
+    }
+    assert spec["executorSpec"]["podTemplateSpec"]["spec"]["nodeSelector"] == {
+        "workload-type": "memory-optimized"
+    }
+    assert "containers" not in spec["driverSpec"]["podTemplateSpec"]["spec"]
+
+
+def test_build_spark_application_unknown_runtime_profile_is_a_noop(profile, resolved_run):
+    resolved_run.resolved.workload.runtime.profile = "gpu"  # not in this environment's config
+
+    spec = KubernetesExecutionProvider(profile, api_client=FakeCustomObjectsApi()).build_spark_application(
+        resolved_run
+    )["spec"]
+
+    assert "driverSpec" not in spec
+    assert "executorSpec" not in spec
+
+
 def test_build_spark_application_adds_volume_mounts_when_present(profile, resolved_run):
     resolved_run.resolved.volume_mounts = [
         {

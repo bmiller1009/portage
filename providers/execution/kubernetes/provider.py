@@ -16,7 +16,7 @@ entry point at JVM startup rather than requiring a dynamic import trick.
 """
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
 from kubernetes import client as k8s_client
@@ -100,6 +100,10 @@ class KubernetesProfile:
     image: str
     kubeconfig_path: str | None = None
     context: str | None = None
+    # Runtime profile name -> provider-specific hint dict (spec §18),
+    # environment-scoped rather than a global registry — e.g.
+    # {"high-memory": {"nodeSelector": {"workload-type": "memory-optimized"}}}.
+    runtime_profiles: dict[str, dict] = field(default_factory=dict)
 
 
 def _last_terminal_outcome(state_transition_history: dict) -> str | None:
@@ -126,6 +130,26 @@ def _to_spark_memory(k8s_quantity: str) -> str:
     if k8s_quantity.endswith("Mi"):
         return f"{k8s_quantity[:-2]}m"
     return k8s_quantity
+
+
+def _pod_spec(volume_mounts: list[dict] | None, node_selector: dict | None, container_name: str) -> dict:
+    """Builds the podTemplateSpec.spec block for one role (driver or
+    executor), merging whichever of volume mounts (spec §48) / a runtime
+    profile's nodeSelector (spec §18) actually apply — empty dict (falsy)
+    when neither does, so the caller can skip driverSpec/executorSpec
+    entirely rather than emitting an empty podTemplateSpec."""
+    pod_spec: dict = {}
+    if node_selector:
+        pod_spec["nodeSelector"] = node_selector
+    if volume_mounts:
+        pod_spec["volumes"] = [{"name": vm["name"], **vm["volume"]} for vm in volume_mounts]
+        pod_spec["containers"] = [
+            {
+                "name": container_name,
+                "volumeMounts": [{"name": vm["name"], "mountPath": vm["mount_path"]} for vm in volume_mounts],
+            }
+        ]
+    return pod_spec
 
 
 class KubernetesExecutionProvider:
@@ -199,39 +223,30 @@ class KubernetesExecutionProvider:
             "runtimeVersions": {"sparkVersion": f"{workload.runtime.spark}.0"},
         }
 
-        # VAST NFS mode (spec §48) — the one storage mode that isn't
-        # expressible as sparkConf at all. driverSpec/executorSpec only
-        # expose a podTemplateSpec field on this CRD generation (confirmed
-        # live: `kubectl get crd sparkapplications.spark.apache.org -o
-        # json`, no top-level volumes/volumeMounts fields exist) — a full
-        # Kubernetes PodTemplateSpec merged onto the operator's own
+        # driverSpec/executorSpec only expose a podTemplateSpec field on
+        # this CRD generation (confirmed live: `kubectl get crd
+        # sparkapplications.spark.apache.org -o json`, no top-level
+        # volumes/volumeMounts/nodeSelector fields exist directly) — a
+        # full Kubernetes PodTemplateSpec merged onto the operator's own
         # generated pod, targeting its container by name (also confirmed
         # live: spark-kubernetes-driver / spark-kubernetes-executor — this
         # is Spark's own upstream Kubernetes-backend naming, not specific
-        # to this operator).
-        if run.resolved.volume_mounts:
-            volumes = [{"name": vm["name"], **vm["volume"]} for vm in run.resolved.volume_mounts]
-            volume_mounts = [
-                {"name": vm["name"], "mountPath": vm["mount_path"]} for vm in run.resolved.volume_mounts
-            ]
-            spec["driverSpec"] = {
-                "podTemplateSpec": {
-                    "spec": {
-                        "volumes": volumes,
-                        "containers": [{"name": "spark-kubernetes-driver", "volumeMounts": volume_mounts}],
-                    }
-                }
-            }
-            spec["executorSpec"] = {
-                "podTemplateSpec": {
-                    "spec": {
-                        "volumes": volumes,
-                        "containers": [
-                            {"name": "spark-kubernetes-executor", "volumeMounts": volume_mounts}
-                        ],
-                    }
-                }
-            }
+        # to this operator). Two independent things feed into it: VAST NFS
+        # volume mounts (spec §48, not sparkConf-expressible at all) and a
+        # runtime profile's nodeSelector hint (spec §18) — merged into one
+        # podTemplateSpec per role rather than two competing ones.
+        node_selector = None
+        if workload.runtime.profile:
+            node_selector = self.profile.runtime_profiles.get(workload.runtime.profile, {}).get(
+                "nodeSelector"
+            )
+
+        driver_pod_spec = _pod_spec(run.resolved.volume_mounts, node_selector, "spark-kubernetes-driver")
+        executor_pod_spec = _pod_spec(run.resolved.volume_mounts, node_selector, "spark-kubernetes-executor")
+        if driver_pod_spec:
+            spec["driverSpec"] = {"podTemplateSpec": {"spec": driver_pod_spec}}
+        if executor_pod_spec:
+            spec["executorSpec"] = {"podTemplateSpec": {"spec": executor_pod_spec}}
 
         return {
             "apiVersion": f"{SPARK_APPLICATION_GROUP}/{SPARK_APPLICATION_VERSION}",

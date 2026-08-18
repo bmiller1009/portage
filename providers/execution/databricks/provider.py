@@ -18,7 +18,7 @@ The jar task's entryPoint is used directly as `main_class_name` — no
 splitting needed, since a JVM main class isn't a console_scripts entry point.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from databricks.sdk.service import compute as dbx_compute
@@ -94,6 +94,10 @@ class DatabricksProfile:
     host: str
     cluster_node_type_id: str
     num_workers: int = 1
+    # Runtime profile name -> provider-specific hint dict (spec §18),
+    # environment-scoped rather than a global registry — e.g.
+    # {"high-memory": {"node_type_id": "r5.4xlarge"}}.
+    runtime_profiles: dict[str, dict] = field(default_factory=dict)
 
 
 def _split_entry_point(entry_point: str) -> tuple[str, str]:
@@ -147,11 +151,20 @@ class DatabricksExecutionProvider:
                 "libraries": [dbx_compute.Library(whl=workload.application.artifact)],
             }
 
+        node_type_id = self.profile.cluster_node_type_id
+        if workload.runtime.profile:
+            # Not found in this environment's config is a no-op, not an
+            # error (spec §18: "provider translation can determine the
+            # actual infrastructure") — falls back to the profile default.
+            node_type_id = self.profile.runtime_profiles.get(workload.runtime.profile, {}).get(
+                "node_type_id", node_type_id
+            )
+
         return dbx_jobs.SubmitTask(
             task_key="main",
             new_cluster=dbx_compute.ClusterSpec(
                 spark_version=cluster_spark_version,
-                node_type_id=self.profile.cluster_node_type_id,
+                node_type_id=node_type_id,
                 num_workers=self.profile.num_workers,
                 spark_conf=spark_conf,
             ),

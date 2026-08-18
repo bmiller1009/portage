@@ -33,6 +33,30 @@ def test_build_execution_provider_kubernetes(monkeypatch):
     assert isinstance(provider, KubernetesExecutionProvider)
     assert provider.profile.namespace == "default"
     assert provider.profile.image == "portage/wordcount:0.1.0"
+    assert provider.profile.runtime_profiles == {}
+
+
+def test_build_execution_provider_kubernetes_passes_through_runtime_profiles(monkeypatch):
+    monkeypatch.setattr(kubernetes_provider_module.k8s_config, "load_kube_config", lambda **kwargs: None)
+    monkeypatch.setattr(kubernetes_provider_module.k8s_client, "CustomObjectsApi", lambda: object())
+
+    profile = ExecutionProfile(
+        name="phase0-remote",
+        provider="kubernetes",
+        config={
+            "namespace": "default",
+            "service_account": "spark",
+            "image": "portage/wordcount:0.1.0",
+            "runtimeProfiles": {"high-memory": {"nodeSelector": {"workload-type": "memory-optimized"}}},
+        },
+    )
+
+    provider = build_execution_provider(profile)
+
+    assert isinstance(provider, KubernetesExecutionProvider)
+    assert provider.profile.runtime_profiles == {
+        "high-memory": {"nodeSelector": {"workload-type": "memory-optimized"}}
+    }
 
 
 def test_build_execution_provider_databricks(monkeypatch):

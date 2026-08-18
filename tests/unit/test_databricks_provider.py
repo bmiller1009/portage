@@ -76,6 +76,29 @@ def resolved_jar_run() -> RunRequest:
     return RunRequest(run_id="abc123", resolved=resolved)
 
 
+def test_build_run_submission_applies_runtime_profile_node_type(resolved_run):
+    profile = DatabricksProfile(
+        host="https://example.databricks.com",
+        cluster_node_type_id="i3.xlarge",
+        runtime_profiles={"high-memory": {"node_type_id": "r5.4xlarge"}},
+    )
+    resolved_run.resolved.workload.runtime.profile = "high-memory"
+
+    task = DatabricksExecutionProvider(profile).build_run_submission(resolved_run)
+
+    assert task.new_cluster is not None
+    assert task.new_cluster.node_type_id == "r5.4xlarge"
+
+
+def test_build_run_submission_unknown_runtime_profile_falls_back_to_default(profile, resolved_run):
+    resolved_run.resolved.workload.runtime.profile = "gpu"  # not in this environment's config
+
+    task = DatabricksExecutionProvider(profile).build_run_submission(resolved_run)
+
+    assert task.new_cluster is not None
+    assert task.new_cluster.node_type_id == "i3.xlarge"
+
+
 def test_build_run_submission_splits_entry_point_into_package_and_entry(profile, resolved_run):
     provider = DatabricksExecutionProvider(profile)
     task = provider.build_run_submission(resolved_run)

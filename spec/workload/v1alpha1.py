@@ -14,6 +14,13 @@ class WorkloadMetadata(BaseModel):
 
 class RuntimeSpec(BaseModel):
     spark: str
+    # Named runtime profile (spec §18 — "standard"/"high-memory"/"gpu"),
+    # e.g. Kubernetes nodeSelector or a Databricks node-type SKU. Optional
+    # and environment-scoped (ExecutionProfile.config["runtimeProfiles"]),
+    # not a global registry — a name absent from the target environment's
+    # config is not an error (§18: "provider translation can determine
+    # the actual infrastructure"), just a no-op.
+    profile: str | None = None
 
 
 class ApplicationSpec(BaseModel):

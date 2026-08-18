@@ -45,6 +45,7 @@ def build_execution_provider(execution_profile: ExecutionProfile) -> ExecutionPr
             image=config["image"],
             kubeconfig_path=config.get("kubeconfig_path"),
             context=config.get("context"),
+            runtime_profiles=config.get("runtimeProfiles", {}),
         )
         return KubernetesExecutionProvider(profile)
 
@@ -55,6 +56,7 @@ def build_execution_provider(execution_profile: ExecutionProfile) -> ExecutionPr
             host=config["host"],
             cluster_node_type_id=config["cluster_node_type_id"],
             num_workers=config.get("num_workers", 1),
+            runtime_profiles=config.get("runtimeProfiles", {}),
         )
         return DatabricksExecutionProvider(profile, client=cast(WorkspaceClientLike, WorkspaceClient()))
 
