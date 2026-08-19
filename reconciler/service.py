@@ -87,7 +87,7 @@ async def _resolve_dataset_config(
                 else PathBinding(uri=binding_row.uri)
             )
             datasets[ref.dataset] = Dataset(
-                apiVersion="runtime/v1alpha1",
+                apiVersion="runtime/v1",
                 kind="Dataset",
                 metadata=DatasetMetadata(name=ref.dataset),
                 bindings={environment_name: binding},
@@ -123,7 +123,7 @@ async def _resolve_artifact_reference(session: AsyncSession, reference: str, env
         session, name, version, environment_name, required=False
     )
     artifact = Artifact(
-        apiVersion="runtime/v1alpha1",
+        apiVersion="runtime/v1",
         kind="Artifact",
         metadata=ArtifactMetadata(name=name, version=version),
         bindings=(

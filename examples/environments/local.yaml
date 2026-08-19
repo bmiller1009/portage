@@ -1,4 +1,4 @@
-apiVersion: runtime/v1alpha1
+apiVersion: runtime/v1
 kind: Environment
 metadata:
   name: local

@@ -1,19 +1,21 @@
-"""Environment schema, v1alpha1 (docs/architecture/spec.md §8) — Phase-0-scoped.
+"""Environment schema (docs/architecture/spec.md §8). Stable as of v1.0
+(docs/architecture/STABILITY.md) — apiVersion "runtime/v1"; the
+"runtime/v1alpha1" name still parses but is deprecated.
 
-This is intentionally minimal: enough for the CLI to pick an execution
-provider and a storage provider by name. The full v0.1 environment
-resolver (persisted execution/storage *profiles* — connection details,
-credentials references, catalog config) is out of scope here; for Phase 0
-the "profile" a provider needs (kubeconfig context, S3 endpoint/credentials)
-is resolved from environment variables by the provider construction code
-in cli/main.py, not by this model.
+Intentionally minimal: `execution.profile`/`data.profile` name an
+`ExecutionProfile`/`StorageProfile` row (connection details, credential
+references, catalog config) resolved by the API against the database, not
+by this model — this schema itself only says which provider+profile an
+environment name points at.
 """
 
 from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
+
+from spec.stability import warn_if_deprecated
 
 
 class EnvironmentMetadata(BaseModel):
@@ -31,11 +33,16 @@ class DataRef(BaseModel):
 
 
 class Environment(BaseModel):
-    apiVersion: Literal["runtime/v1alpha1"]
+    apiVersion: Literal["runtime/v1", "runtime/v1alpha1"]
     kind: Literal["Environment"]
     metadata: EnvironmentMetadata
     execution: ExecutionRef
     data: DataRef
+
+    @model_validator(mode="after")
+    def _warn_deprecated_api_version(self) -> "Environment":
+        warn_if_deprecated(self.apiVersion, "Environment")
+        return self
 
 
 def parse_environment(path: str | Path) -> Environment:

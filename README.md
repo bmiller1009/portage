@@ -33,7 +33,7 @@ No code changes. No infrastructure objects in the workload definition.
 
 > A conforming workload MUST NOT belong to the infrastructure on which it happens to execute.
 
-Portage is not a Spark platform and does not compete with Databricks, Cloudera, Trino, Iceberg, or Kubernetes. It composes those systems behind a stable portability boundary. See [`docs/architecture/spec.md`](docs/architecture/spec.md) for the full architecture and development specification, and [`docs/adr/`](docs/adr/) for the individual decisions that follow from it.
+Portage is not a Spark platform and does not compete with Databricks, Cloudera, Trino, Iceberg, or Kubernetes. It composes those systems behind a stable portability boundary. See [`docs/architecture/spec.md`](docs/architecture/spec.md) for the full architecture and development specification, and [`docs/adr/`](docs/adr/) for the individual decisions that follow from it. As of v1.0, the workload/environment/dataset/artifact schemas and the provider extension surface are stable — see [`docs/architecture/STABILITY.md`](docs/architecture/STABILITY.md) and [`docs/architecture/PROVIDER_SDK.md`](docs/architecture/PROVIDER_SDK.md).
 
 ## Non-goals
 

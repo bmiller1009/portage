@@ -1,4 +1,7 @@
-"""Dataset binding schema, v1alpha1 (docs/architecture/spec.md §9/§11).
+"""Dataset binding schema (docs/architecture/spec.md §9/§11). Stable as of
+v1.0 (docs/architecture/STABILITY.md) — apiVersion "runtime/v1"; the
+"runtime/v1alpha1" name still parses but is deprecated.
+
 Path bindings point at a plain URI; table bindings (v0.5) point at a
 fully-qualified identifier resolved through the Iceberg REST catalog
 (docs/architecture/spec.md §11 — "Iceberg is the preferred neutral table
@@ -8,8 +11,9 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from spec.stability import warn_if_deprecated
 from spec.workload.v1alpha1 import SparkWorkload
 
 
@@ -36,10 +40,15 @@ ICEBERG_CATALOG_NAME = "portage_iceberg"
 
 
 class Dataset(BaseModel):
-    apiVersion: Literal["runtime/v1alpha1"]
+    apiVersion: Literal["runtime/v1", "runtime/v1alpha1"]
     kind: Literal["Dataset"]
     metadata: DatasetMetadata
     bindings: dict[str, Binding]
+
+    @model_validator(mode="after")
+    def _warn_deprecated_api_version(self) -> "Dataset":
+        warn_if_deprecated(self.apiVersion, "Dataset")
+        return self
 
 
 def parse_dataset(path: str | Path) -> Dataset:

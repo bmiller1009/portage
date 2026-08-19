@@ -1481,6 +1481,12 @@ Each provider should have:
 
 A provider cannot be considered supported simply because it compiles. It must pass the provider conformance suite.
 
+As of v1.0, this interface is documented concretely in
+[PROVIDER_SDK.md](PROVIDER_SDK.md) against the two real `ExecutionProvider`/
+`StorageProvider` implementations (Kubernetes/Databricks, S3/VAST/ADLS) —
+see also [STABILITY.md](STABILITY.md) for the workload/environment/dataset
+schema stability policy.
+
 ## 44. Plugin Strategy
 
 Do not implement unrestricted arbitrary code loading into the control plane in v0.x. Official providers live in-tree initially.

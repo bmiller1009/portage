@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from spec.workload.v1alpha1 import json_schema, parse_workload
+from spec.workload.v1alpha1 import SparkWorkload, json_schema, parse_workload
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[2] / "examples"
 
@@ -12,11 +12,42 @@ def test_parses_valid_workload():
     workload = parse_workload(EXAMPLES_DIR / "wordcount.yaml")
 
     assert workload.metadata.name == "wordcount"
+    assert workload.apiVersion == "runtime/v1"
     assert workload.runtime.spark == "4.2"
     assert workload.application.entryPoint == "wordcount.jobs.count"
     assert workload.datasets.inputs["text"].dataset == "wordcount.raw"
     assert workload.datasets.outputs["counts"].dataset == "wordcount.counts"
     assert workload.resources.scaling.maxExecutors == 2
+
+
+def _minimal_workload_kwargs(api_version: str) -> dict:
+    return {
+        "apiVersion": api_version,
+        "kind": "SparkWorkload",
+        "metadata": {"name": "w", "version": "1.0"},
+        "runtime": {"spark": "4.2"},
+        "application": {"type": "python-wheel", "artifact": "artifact://w/1.0", "entryPoint": "w.jobs.run"},
+        "datasets": {},
+        "resources": {
+            "driver": {"cores": 1, "memory": "1Gi"},
+            "executor": {"cores": 1, "memory": "1Gi"},
+            "scaling": {"minExecutors": 1, "maxExecutors": 1},
+        },
+        "execution": {"timeout": "1h"},
+    }
+
+
+def test_stable_api_version_parses_without_warning(recwarn):
+    SparkWorkload.model_validate(_minimal_workload_kwargs("runtime/v1"))
+
+    assert not any(issubclass(w.category, DeprecationWarning) for w in recwarn.list)
+
+
+def test_deprecated_api_version_still_parses_but_warns():
+    with pytest.warns(DeprecationWarning, match="runtime/v1alpha1.*deprecated"):
+        workload = SparkWorkload.model_validate(_minimal_workload_kwargs("runtime/v1alpha1"))
+
+    assert workload.apiVersion == "runtime/v1alpha1"
 
 
 def test_parses_multi_dataset_workload():
