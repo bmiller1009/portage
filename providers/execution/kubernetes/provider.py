@@ -13,6 +13,28 @@ present on the live CRD (`kubectl get crd sparkapplications.spark.apache.org
 -o json`), unlike mainApplicationFile, which isn't. JVM doesn't need the
 launcher indirection Python needs, since spark-submit's --class fixes the
 entry point at JVM startup rather than requiring a dynamic import trick.
+
+spark-declarative-pipeline (spec §39, v0.6.5) reuses the mainClass shape
+(mainClass=SPARK_PIPELINES_MAIN_CLASS, no jars) -- confirmed live that this
+correctly bootstraps SparkPipelines and reaches dataflow-graph creation.
+**Known limitation, confirmed live, not yet worked around**: `spark-pipelines
+run` requires a Spark Connect session (pyspark/pipelines/cli.py calls
+spark.client.execute_command, which only exists under Connect), and
+bootstrapping an embedded local Connect session inside a plain spark-submit
+process hits a driver-plugin classloader wall
+(NoClassDefFoundError: org/apache/spark/sql/classic/SparkSession) even once
+the spark-connect_2.13 Maven artifact is pulled in via --packages -- the
+class is verified present in spark-sql_2.13-4.2.0.jar on the same image, but
+isn't visible from the classloader SparkContext uses to load driver plugins.
+This isn't a missing-dependency gap closeable with more --packages/--jars;
+`spark-pipelines` fundamentally wants either a separately-deployed, already
+-running Spark Connect *server* (reached via --remote sc://host:port) or an
+in-process one that this per-run, single-JVM SparkApplication CRD model has
+no clean way to stand up. A real fix needs a persistent Connect server
+deployed as its own long-lived resource, with this provider's pipeline
+branch submitting a lightweight client run against it instead -- a
+genuinely different shape from every other workload type here, and out of
+this issue's scope.
 """
 
 import asyncio
@@ -44,6 +66,17 @@ SPARK_APPLICATION_PLURAL = "sparkapplications"
 # generic launcher that imports "<module.path>.<callable>" (a workload's
 # entryPoint) and calls it. Providers never generate per-job launcher code.
 LAUNCHER_PATH = "local:///opt/portage/launcher.py"
+
+# Confirmed live (v0.6.5) against the apache/spark:4.2.0-python3 base image:
+# bin/spark-pipelines itself resolves to exactly this path
+# (Path(os.path.dirname(pyspark.__file__)) / "pipelines" / "cli.py") and
+# execs `spark-class org.apache.spark.deploy.SparkPipelines <this path> "$@"`
+# -- SparkPipelines is a normal Spark-core JVM main class (like
+# org.apache.spark.repl.Main for spark-shell), so it needs no "jars" entry,
+# just mainClass + this file as the first driverArgs element, mirroring how
+# spark-shell invokes org.apache.spark.repl.Main with no primary resource.
+PIPELINES_CLI_PATH = "/opt/spark/python/pyspark/pipelines/cli.py"
+SPARK_PIPELINES_MAIN_CLASS = "org.apache.spark.deploy.SparkPipelines"
 
 # Native SparkApplication currentStateSummary -> canonical RunState (spec §23).
 # Enum values confirmed against the live CRD (kubectl get crd
@@ -229,6 +262,17 @@ class KubernetesExecutionProvider:
                 "mainClass": workload.application.entryPoint,
                 "jars": workload.application.artifact,
                 "driverArgs": list(workload.arguments),
+            }
+        elif workload.application.type == "spark-declarative-pipeline":
+            artifact_spec = {
+                "mainClass": SPARK_PIPELINES_MAIN_CLASS,
+                "driverArgs": [
+                    PIPELINES_CLI_PATH,
+                    "run",
+                    "--spec",
+                    workload.application.pipelineSpec,
+                    *workload.arguments,
+                ],
             }
         else:
             artifact_spec = {

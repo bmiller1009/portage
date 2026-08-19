@@ -77,6 +77,54 @@ execution:
         parse_workload(invalid)
 
 
+def test_parses_declarative_pipeline_workload():
+    workload = parse_workload(EXAMPLES_DIR / "hello-pipeline.yaml")
+
+    assert workload.application.type == "spark-declarative-pipeline"
+    assert workload.application.pipelineSpec == "local:///opt/portage/pipelines/hello/spark-pipeline.yml"
+    assert workload.application.artifact is None
+    assert workload.application.entryPoint is None
+
+
+def test_rejects_declarative_pipeline_missing_pipeline_spec(tmp_path):
+    invalid = tmp_path / "invalid.yaml"
+    invalid.write_text(
+        """
+apiVersion: runtime/v1alpha1
+kind: SparkWorkload
+
+metadata:
+  name: broken-pipeline
+  version: "0.0.1"
+
+runtime:
+  spark: "4.2"
+
+application:
+  type: spark-declarative-pipeline
+
+datasets: {}
+
+resources:
+  driver:
+    cores: 1
+    memory: 2Gi
+  executor:
+    cores: 1
+    memory: 2Gi
+  scaling:
+    minExecutors: 1
+    maxExecutors: 1
+
+execution:
+  timeout: 10m
+"""
+    )
+
+    with pytest.raises(ValidationError):
+        parse_workload(invalid)
+
+
 def test_rejects_workload_missing_entry_point(tmp_path):
     invalid = tmp_path / "invalid.yaml"
     invalid.write_text(

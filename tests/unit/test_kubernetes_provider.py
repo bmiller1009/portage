@@ -72,6 +72,13 @@ def resolved_jar_run() -> RunRequest:
     return RunRequest(run_id="abc123", resolved=resolved)
 
 
+@pytest.fixture
+def resolved_pipeline_run() -> RunRequest:
+    workload = parse_workload(EXAMPLES_DIR / "hello-pipeline.yaml")
+    resolved = ResolvedWorkload(workload=workload, dataset_config={}, environment_name="k8s-remote")
+    return RunRequest(run_id="abc123", resolved=resolved)
+
+
 def test_build_spark_application_shape(profile, resolved_run):
     provider = KubernetesExecutionProvider(profile, api_client=FakeCustomObjectsApi())
     manifest = provider.build_spark_application(resolved_run)
@@ -154,6 +161,22 @@ def test_build_spark_application_jar_shape(profile, resolved_jar_run):
     assert spec["mainClass"] == "org.apache.spark.examples.SparkPi"
     assert spec["jars"] == "local:///opt/spark/examples/jars/spark-examples.jar"
     assert spec["driverArgs"] == ["2"]
+    assert "pyFiles" not in spec
+
+
+def test_build_spark_application_declarative_pipeline_shape(profile, resolved_pipeline_run):
+    provider = KubernetesExecutionProvider(profile, api_client=FakeCustomObjectsApi())
+    manifest = provider.build_spark_application(resolved_pipeline_run)
+
+    spec = manifest["spec"]
+    assert spec["mainClass"] == "org.apache.spark.deploy.SparkPipelines"
+    assert spec["driverArgs"] == [
+        "/opt/spark/python/pyspark/pipelines/cli.py",
+        "run",
+        "--spec",
+        "local:///opt/portage/pipelines/hello/spark-pipeline.yml",
+    ]
+    assert "jars" not in spec
     assert "pyFiles" not in spec
 
 

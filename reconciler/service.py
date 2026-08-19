@@ -109,20 +109,14 @@ async def _resolve_dataset_config(
     return config
 
 
-async def _resolve_artifact(
-    session: AsyncSession, workload: SparkWorkload, environment_name: str
-) -> SparkWorkload:
-    """Resolves an artifact:// reference (spec §51) through the persisted
-    ArtifactBinding table, returning a copy of the workload with
-    application.artifact replaced by the resolved, environment-specific
-    URI — providers keep reading workload.application.artifact exactly as
-    before, they just now get a real URI instead of a logical reference.
-    A non-artifact:// value (e.g. a local:// path baked into an image,
-    like examples/wordcount-jar.yaml's) passes through unchanged — the
+async def _resolve_artifact_reference(session: AsyncSession, reference: str, environment_name: str) -> str:
+    """Resolves a single artifact:// reference (spec §51) through the
+    persisted ArtifactBinding table to its environment-specific URI. A
+    non-artifact:// value (e.g. a local:// path baked into an image, like
+    examples/wordcount-jar.yaml's) passes through unchanged — the
     abstraction is opt-in, not mandatory."""
-    reference = workload.application.artifact
     if not reference.startswith("artifact://"):
-        return workload
+        return reference
 
     name, version = parse_artifact_reference(reference)
     binding_row = await repositories.get_artifact_binding(
@@ -136,10 +130,31 @@ async def _resolve_artifact(
             {environment_name: ArtifactPathBinding(uri=binding_row.uri)} if binding_row is not None else {}
         ),
     )
-    resolved_uri = resolve_artifact_uri(reference, artifact, environment_name)
-    return workload.model_copy(
-        update={"application": workload.application.model_copy(update={"artifact": resolved_uri})}
-    )
+    return resolve_artifact_uri(reference, artifact, environment_name)
+
+
+async def _resolve_artifact(
+    session: AsyncSession, workload: SparkWorkload, environment_name: str
+) -> SparkWorkload:
+    """Resolves both of ApplicationSpec's possible artifact:// fields —
+    `artifact` (python-wheel/jvm-jar) and `pipelineSpec`
+    (spark-declarative-pipeline, spec §39) — through the same
+    ArtifactBinding-backed mechanism, returning a copy of the workload
+    with whichever field is set replaced by its resolved URI. Providers
+    keep reading these fields exactly as before, they just now get a
+    real URI instead of a logical reference."""
+    updates: dict[str, str] = {}
+    if workload.application.artifact is not None:
+        updates["artifact"] = await _resolve_artifact_reference(
+            session, workload.application.artifact, environment_name
+        )
+    if workload.application.pipelineSpec is not None:
+        updates["pipelineSpec"] = await _resolve_artifact_reference(
+            session, workload.application.pipelineSpec, environment_name
+        )
+    if not updates:
+        return workload
+    return workload.model_copy(update={"application": workload.application.model_copy(update=updates)})
 
 
 MAX_SUBMISSION_ATTEMPTS = 5

@@ -1,0 +1,5 @@
+name: hello_pipeline
+libraries:
+  - glob:
+      include: transformations/**
+storage: file:///opt/portage/pipelines/hello/storage

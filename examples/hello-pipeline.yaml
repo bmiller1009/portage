@@ -1,0 +1,32 @@
+apiVersion: runtime/v1alpha1
+kind: SparkWorkload
+
+metadata:
+  name: hello-pipeline
+  version: "0.1.0"
+
+runtime:
+  spark: "4.2"
+
+application:
+  type: spark-declarative-pipeline
+  pipelineSpec: local:///opt/portage/pipelines/hello/spark-pipeline.yml
+
+datasets: {}
+
+resources:
+  driver:
+    cores: 1
+    memory: 2Gi
+
+  executor:
+    cores: 1
+    memory: 2Gi
+
+  scaling:
+    minExecutors: 1
+    maxExecutors: 2
+
+execution:
+  timeout: 30m
+  retries: 0

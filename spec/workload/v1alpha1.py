@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class WorkloadMetadata(BaseModel):
@@ -24,9 +24,28 @@ class RuntimeSpec(BaseModel):
 
 
 class ApplicationSpec(BaseModel):
-    type: Literal["python-wheel", "jvm-jar"]
-    artifact: str
-    entryPoint: str
+    """type discriminates which fields are required (spec §39):
+    python-wheel/jvm-jar carry a build artifact + a function/class entry
+    point; spark-declarative-pipeline carries a pipelineSpec reference
+    (a path to a spark-pipeline.yml, resolved through the same
+    artifact:// binding mechanism as `artifact`) instead — there is no
+    separate build artifact or single entry point for a declarative
+    pipeline, just its spec file and the transformation sources it
+    points at."""
+
+    type: Literal["python-wheel", "jvm-jar", "spark-declarative-pipeline"]
+    artifact: str | None = None
+    entryPoint: str | None = None
+    pipelineSpec: str | None = None
+
+    @model_validator(mode="after")
+    def _check_type_specific_fields(self) -> "ApplicationSpec":
+        if self.type == "spark-declarative-pipeline":
+            if not self.pipelineSpec:
+                raise ValueError("pipelineSpec is required when type is 'spark-declarative-pipeline'")
+        elif not self.artifact or not self.entryPoint:
+            raise ValueError(f"artifact and entryPoint are required when type is '{self.type}'")
+        return self
 
 
 class DatasetRef(BaseModel):

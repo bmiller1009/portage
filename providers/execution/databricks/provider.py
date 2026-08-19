@@ -189,6 +189,16 @@ class DatabricksExecutionProvider:
 
         spark_conf = {**run.resolved.storage_config, **run.resolved.dataset_config}
 
+        if workload.application.type == "spark-declarative-pipeline":
+            # Not yet supported here (spec §39's Declarative Pipelines work is
+            # scoped to the Kubernetes provider for v0.6.5 -- see
+            # providers/execution/kubernetes/provider.py's own docstring for
+            # the confirmed-live Spark Connect blocker even there). Reject
+            # explicitly rather than silently falling into the python-wheel
+            # branch below, where a None entryPoint would crash instead.
+            raise TerminalProviderError(
+                "Databricks provider does not yet support spark-declarative-pipeline workloads"
+            )
         if workload.application.type == "jvm-jar":
             task_kwargs = {
                 "spark_jar_task": dbx_jobs.SparkJarTask(
@@ -198,6 +208,10 @@ class DatabricksExecutionProvider:
                 "libraries": [dbx_compute.Library(jar=workload.application.artifact)],
             }
         else:
+            # ApplicationSpec's own validator (spec/workload/v1alpha1.py)
+            # guarantees entryPoint is set for every type but
+            # spark-declarative-pipeline, already handled above.
+            assert workload.application.entryPoint is not None
             package_name, entry_point_name = _split_entry_point(workload.application.entryPoint)
             task_kwargs = {
                 "python_wheel_task": dbx_jobs.PythonWheelTask(
