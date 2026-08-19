@@ -1,16 +1,22 @@
 # Provider SDK
 
 v1.0 (spec.md §71, "Portable Contract" exit criterion) requires the
-provider SDK to be stable. There is no separate installable SDK package —
-the SDK *is* the two Python `Protocol` classes below, structurally
-implemented (no base-class inheritance required) by
+provider SDK to be stable. There is no separate installable SDK package,
+and **no dynamic or hot-loadable plugin mechanism exists** — Portage
+provides stable provider interfaces and contract tests for implementing
+additional providers, not a plugin system you install without touching
+core code. The SDK *is* the two Python `Protocol` classes below,
+structurally implemented (no base-class inheritance required) by
 `providers/execution/kubernetes/provider.py` and
 `providers/execution/databricks/provider.py` for execution, and
 `providers/storage/s3/provider.py`, `providers/storage/vast/provider.py`,
 and `providers/storage/adls/provider.py` for storage. Writing a new
-provider means implementing one of these two Protocols; nothing else in
-the codebase needs to change to register it (see "Wiring a provider in"
-below).
+provider today means implementing one of these two Protocols and adding
+it to `control_plane/provider_factory.py`'s dispatch (see "Wiring a
+provider in" below) — a core-code change and PR, not an installable
+plugin. Dynamic provider loading (discoverable third-party packages,
+entry-point registration) remains roadmap work, not a current
+capability — this document will say so explicitly if that ever changes.
 
 ## ExecutionProvider
 
@@ -58,7 +64,13 @@ class ExecutionProvider(Protocol):
   Spark versions, languages, and the boolean feature flags
   `match_capabilities()` checks workload requirements against:
   `dynamic_allocation`, `gpu`, `streaming`, `local_disk`,
-  `spark_connect`).
+  `spark_connect`), plus `verification` (`"live_verified"` or
+  `"translation_layer_only"`, v1.0.0) — an honest, self-reported signal
+  distinguishing "this provider has actually executed a real workload
+  against real infrastructure" from "this provider is implemented and
+  unit-tested against fakes, but no real infrastructure has been
+  reachable to test it against." A new provider should default to
+  `"translation_layer_only"` until it has a real live run behind it.
 
 **Errors**: raise `RetryableProviderError` for anything the reconciler
 should safely requeue (timeouts, 429s, transient 5xx) and
@@ -100,7 +112,9 @@ class StorageProvider(Protocol):
   "missing credential" means "use ambient identity," not an error).
 - **`health_check`** — a cheap, synchronous reachability check (spec §47).
 - **`capabilities`** — protocol name plus whether path bindings, table
-  bindings, or both are supported (spec §11's dataset binding kinds).
+  bindings, or both are supported (spec §11's dataset binding kinds), plus
+  `verification` (same `"live_verified"`/`"translation_layer_only"` tier
+  as `ExecutionProvider.capabilities`, v1.0.0).
 - **`volume_mounts`** — `None` for every provider except VAST NFS mode,
   which returns the actual Kubernetes volume/volumeMount manifest
   fragments the execution provider merges into the pod spec (spec §48).
@@ -115,11 +129,24 @@ Providers are constructed from persisted `ExecutionProfile`/
 dispatch on the profile's `provider` string (`"kubernetes"`,
 `"databricks"`; `"s3"`, `"vast"`, `"adls"`) to the matching concrete
 class, passing the profile's `config` dict and resolved
-`credential_reference` through to the provider's constructor. Adding a
-new provider means: implement the Protocol, add one dispatch branch here,
-and add the new provider name to the `Literal` unions in
-`spec/environment/v1alpha1.py`'s `ExecutionRef`/`DataRef` — no other file
-needs to change, by design (ADR 0005).
+`credential_reference` through to the provider's constructor. This is the
+single, obvious dispatch point — no scattered `if provider == "x"`
+conditionals exist elsewhere in the codebase (`api/`, `reconciler/`,
+`cli/` all call through this factory rather than branching on provider
+name themselves). Adding a new provider means:
+
+1. Implement the Protocol (`ExecutionProvider` or `StorageProvider`).
+2. Add one dispatch branch in `control_plane/provider_factory.py`.
+3. Add the new provider name to the `Literal` unions in
+   `spec/environment/v1alpha1.py`'s `ExecutionRef`/`DataRef`.
+4. Pass the shared provider-contract test suite
+   (`tests/unit/test_execution_provider_contracts.py` or
+   `test_storage_provider_contracts.py`) — the same behavioral checks
+   every existing provider runs, not a new bespoke test suite per
+   provider.
+
+No other file needs to change, by design (ADR 0005) — but this is still
+a core-code PR, not an installable plugin (see this document's opening).
 
 ## Related
 
