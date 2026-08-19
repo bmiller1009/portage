@@ -11,7 +11,7 @@ Explicitly not built here: drag/drop DAG editors, a notebook editor, a large SQL
 - **Environments** — `GET /v1/environments`.
 - **Datasets** — dataset bindings (`GET /v1/datasets`) and artifact bindings (`GET /v1/artifacts`, spec §51) as two sections on one page.
 - **Providers** — every registered execution/storage profile (`GET /v1/providers`); click a row to fetch its live capability set (`GET /v1/providers/{name}/capabilities`).
-- **Conformance** — an honest "not yet implemented" placeholder. Dynamic conformance testing (`plane conformance test`) is v0.4 milestone scope, not built here.
+- **Conformance** — an honest "not yet implemented" placeholder for *this page specifically*; the underlying capability (`plane conformance test`/`report`, `GET /v1/conformance/*`) is real and live-verified — this UI page hasn't been built to surface it yet.
 - **System** — API/ready health, a recent-run-state summary, and a link to `GET /metrics` (raw Prometheus text isn't rendered inline — spec §29: "the runtime should export rather than become a dashboard product").
 
 ## Development

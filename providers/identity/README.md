@@ -2,4 +2,4 @@
 
 Machine identity integration: OAuth2 client credentials, OIDC federation, Kubernetes ServiceAccounts, cloud workload identities, and Databricks service principals (`docs/architecture/spec.md` §34). Personal access tokens are explicitly avoided as the architectural default.
 
-Not yet implemented — v0.4 milestone.
+No implementation lives in this directory specifically — the two pieces of what this directory describes both landed elsewhere: OIDC authentication and RBAC (JWT/JWKS verification, a five-role hierarchy) live in `api/auth.py` (v0.4), and machine identity for provider access (OAuth2 client credentials for Databricks, static/workload-identity credentials for storage providers) is the `credential_reference` pattern in `control_plane/credentials.py`, consumed by each provider's own client construction (e.g. `providers/execution/databricks/provider.py::_get_client()`). Kubernetes ServiceAccount-as-identity for the reconciler itself (in-cluster auth) is `charts/portage`'s `reconciler.inClusterKubeconfig` — see that chart's `values.yaml`.

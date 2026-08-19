@@ -57,7 +57,13 @@ def test_storage_protocol_label_distinguishes_vast_modes():
         ("kubernetes", "vast-s3", certification.STATUS_PASS),
         ("kubernetes", "vast-nfs", certification.STATUS_BLOCKED),
         ("kubernetes", "adls", certification.STATUS_BLOCKED),
-        ("databricks", "s3", certification.STATUS_BLOCKED),
+        # Live-verified since v0.3 (real OAuth M2M runs), including
+        # v1.0.0's Spark 4.2 run — paired with Unity Catalog Volumes
+        # storage, registered under the "s3" storage-provider type.
+        ("databricks", "s3", certification.STATUS_PASS),
+        # ADLS itself remains translation-layer-only (no real Azure
+        # subscription available to this project) regardless of which
+        # execution provider it's paired with.
         ("databricks", "adls", certification.STATUS_BLOCKED),
     ],
 )

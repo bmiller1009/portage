@@ -4,4 +4,4 @@ Static and dynamic portability conformance (`docs/architecture/spec.md` §21–2
 
 Dynamic conformance (`plane conformance test`) executes the same workload across multiple providers and compares semantic output — schema, row count, null distribution, partition coverage, key aggregates, business invariants, deterministic row hashes — never raw byte-for-byte file comparison (§22, ADR 0011).
 
-Not yet implemented — Phase 0 exit demonstration depends on a minimal version of this; full static+dynamic runner is v0.4 milestone.
+Implemented since v0.4: `comparison.py` (the semantic comparator), `control_plane/conformance.py` (server-side `compare_runs()`, backing `POST /v1/conformance/compare`), and `control_plane/certification.py` (the static PASS/FAIL/BLOCKED provider certification report, backing `GET /v1/conformance/report`) — reached via `plane conformance test`/`plane conformance report`. As of v1.0.0, `examples/claims_app` is the live, end-to-end proof: the same workload/artifact reached `SUCCEEDED` with byte-identical output on both a real Kubernetes environment and a real Databricks Serverless environment.

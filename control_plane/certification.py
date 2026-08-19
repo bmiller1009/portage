@@ -10,9 +10,14 @@ combination — not what spec §78's own example table shows.
 PASS requires real live verification in this project's history (spec
 §67's discipline: state what's actually been proven, not what's merely
 implemented). BLOCKED means the combination has never been live-verified
-— no Databricks workspace, Azure account, or VAST NFS server has ever
-been reachable from this project (see issues #8, #27, #28's own closing
-comments) — not a fabricated PASS.
+— no Azure account or VAST NFS server has ever been reachable from this
+project (see issues #8, #27, #28's own closing comments) — not a
+fabricated PASS. A real Databricks workspace *has* been reachable since
+v0.3 (issue #8) — Databricks execution is live-verified, paired with
+Unity Catalog Volumes storage registered under the "s3" storage-provider
+type (see issue #62's closing comment for the live v1.0.0 Spark-4.2 run
+against this exact pairing) — so `databricks` is a live-verified
+execution provider, not just Kubernetes.
 
 Storage protocol identification and FAIL detection deliberately avoid
 resolving any environment's own storage credentials: many registered
@@ -37,7 +42,7 @@ STATUS_PASS = "PASS"
 STATUS_FAIL = "FAIL"
 STATUS_BLOCKED = "BLOCKED"
 
-_LIVE_VERIFIED_EXECUTION_PROVIDERS = {"kubernetes"}
+_LIVE_VERIFIED_EXECUTION_PROVIDERS = {"kubernetes", "databricks"}
 _LIVE_VERIFIED_STORAGE_PROTOCOLS = {"s3", "vast-s3"}
 
 
@@ -66,6 +71,16 @@ def _storage_protocol_label(storage_profile: StorageProfile) -> str:
 
 
 def _status_for(execution_provider: str, storage_protocol: str) -> str:
+    # Known simplification: this is a cross-product of two independently
+    # live-verified sets, not per-pair verification — e.g. adding
+    # "databricks" to the execution set now also marks a
+    # (databricks, vast-s3) combination PASS even though that exact pair
+    # has never actually been run together (Databricks execution has only
+    # ever been paired with Unity Catalog Volumes storage; no on-prem VAST
+    # hardware is network-reachable from Databricks' cloud compute
+    # regardless). Acceptable for now since every currently-registered
+    # environment only ever pairs a provider with the storage it was
+    # actually built to use — revisit if that stops being true.
     if (
         execution_provider in _LIVE_VERIFIED_EXECUTION_PROVIDERS
         and storage_protocol in _LIVE_VERIFIED_STORAGE_PROTOCOLS

@@ -2149,4 +2149,4 @@ That should be the architectural constraint against which every future feature r
 
 ---
 
-The biggest design decision in this draft is not building Trino, pipelines, Iceberg, or AI into the core execution path. They become optional integrations after workload portability is proven. That makes Phase 0 → v0.3 a surprisingly tractable project: prove the same real Spark artifact can execute on K8s/VAST or S3 and Databricks/ADLS through one contract. If that works cleanly, everything else becomes additive rather than existential.
+The biggest design decision in this spec is not building Trino, pipelines, Iceberg, or AI into the core execution path. They become optional integrations after workload portability is proven. That made Phase 0 → v0.3 a surprisingly tractable project: prove the same real Spark artifact can execute on K8s/VAST or S3 and Databricks/ADLS through one contract. That worked cleanly (live-verified through v1.0), and everything since has been additive rather than existential.
