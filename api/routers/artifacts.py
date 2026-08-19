@@ -3,7 +3,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import ROLE_OPERATOR, ROLE_VIEWER, Identity, require_role
 from api.schemas import ArtifactBindingCreate, ArtifactBindingOut
-from control_plane import repositories
+from control_plane import audit, repositories
 from control_plane.db import get_db_session
 
 router = APIRouter(prefix="/v1/artifacts", tags=["artifacts"])
@@ -15,8 +15,9 @@ async def create_artifact_binding(
     session: AsyncSession = Depends(get_db_session),
     identity: Identity = Depends(require_role(ROLE_OPERATOR)),
 ):
+    resource = f"{body.artifact_name}/{body.artifact_version}/{body.environment_name}"
     try:
-        return await repositories.create_artifact_binding(
+        binding = await repositories.create_artifact_binding(
             session,
             artifact_name=body.artifact_name,
             artifact_version=body.artifact_version,
@@ -25,9 +26,39 @@ async def create_artifact_binding(
             uri=body.uri,
         )
     except repositories.AlreadyExistsError as e:
+        await audit.record_audit_event(
+            session,
+            identity=identity.email or identity.subject,
+            action="ARTIFACT_BINDING_CREATE",
+            resource=resource,
+            environment_name=body.environment_name,
+            result=audit.RESULT_FAILURE,
+            source=identity.source,
+        )
         raise HTTPException(status_code=409, detail=str(e)) from e
     except repositories.NotFoundError as e:
+        await audit.record_audit_event(
+            session,
+            identity=identity.email or identity.subject,
+            action="ARTIFACT_BINDING_CREATE",
+            resource=resource,
+            environment_name=body.environment_name,
+            result=audit.RESULT_FAILURE,
+            source=identity.source,
+        )
         raise HTTPException(status_code=422, detail=str(e)) from e
+
+    await audit.record_audit_event(
+        session,
+        identity=identity.email or identity.subject,
+        action="ARTIFACT_BINDING_CREATE",
+        resource=resource,
+        environment_name=body.environment_name,
+        result=audit.RESULT_SUCCESS,
+        source=identity.source,
+    )
+    await session.refresh(binding)
+    return binding
 
 
 @router.get("", response_model=list[ArtifactBindingOut])

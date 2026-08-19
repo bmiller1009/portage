@@ -36,7 +36,7 @@ jobs:
         run: pytest tests/unit/test_execution_provider_contracts.py tests/unit/test_storage_provider_contracts.py -v
 
       - name: Security tests
-        run: pytest tests/unit/test_auth.py tests/unit/test_api_auth_enforcement.py -v
+        run: pytest tests/unit/test_auth.py tests/unit/test_api_auth_enforcement.py tests/security -v
 
       - name: Conformance tests
         run: pytest tests/unit/test_conformance.py tests/unit/test_certification.py tests/unit/test_api_conformance_router.py tests/unit/test_api_certification_router.py tests/unit/test_cli_conformance.py tests/unit/test_cli_certification.py -v

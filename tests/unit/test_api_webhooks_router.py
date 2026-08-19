@@ -5,16 +5,24 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
+import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
-from control_plane import repositories
+from control_plane import audit, repositories
 from control_plane.db import get_db_session
 from control_plane.models import WebhookSubscription
 from tests.unit.conftest import fake_session
 
 app.dependency_overrides[get_db_session] = fake_session
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _no_op_audit(monkeypatch):
+    """This file's fake session (no real DB) can't back a real
+    AuditEvent write — these are router-wiring tests, not audit tests."""
+    monkeypatch.setattr(audit, "record_audit_event", AsyncMock())
 
 
 def test_create_webhook_subscription(monkeypatch):
@@ -30,6 +38,8 @@ def test_create_webhook_subscription(monkeypatch):
         )
     )
     monkeypatch.setattr(repositories, "create_webhook_subscription", mock_create)
+    mock_audit = AsyncMock()
+    monkeypatch.setattr(audit, "record_audit_event", mock_audit)
 
     resp = client.post(
         "/v1/webhooks",
@@ -41,6 +51,13 @@ def test_create_webhook_subscription(monkeypatch):
     assert body["url"] == "https://example.com/hook"
     assert body["event_types"] == ["run.succeeded"]
     assert "secret" not in body
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args is not None
+    # The webhook's HMAC-signing secret must never end up in an audit
+    # record any Viewer-role reader of GET /v1/audit could see.
+    assert mock_audit.await_args.kwargs["action"] == "WEBHOOK_SUBSCRIPTION_CREATE"
+    assert mock_audit.await_args.kwargs["resource"] == str(subscription_id)
+    assert "shh" not in str(mock_audit.await_args.kwargs)
 
 
 def test_list_webhook_subscriptions(monkeypatch):

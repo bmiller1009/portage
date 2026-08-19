@@ -130,15 +130,31 @@ def test_update_dataset_binding(monkeypatch):
             )
         ),
     )
+    mock_audit = AsyncMock()
+    monkeypatch.setattr(audit, "record_audit_event", mock_audit)
+
     resp = client.put("/v1/datasets/ds-a/env-a", json={"kind": "table", "uri": "analytics.x"})
+
     assert resp.status_code == 200
     assert resp.json()["kind"] == "table"
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args is not None
+    assert mock_audit.await_args.kwargs["action"] == "DATASET_BINDING_UPDATE"
+    assert mock_audit.await_args.kwargs["resource"] == "ds-a/env-a"
 
 
 def test_delete_dataset_binding(monkeypatch):
     monkeypatch.setattr(repositories, "delete_dataset_binding", AsyncMock())
+    mock_audit = AsyncMock()
+    monkeypatch.setattr(audit, "record_audit_event", mock_audit)
+
     resp = client.delete("/v1/datasets/ds-a/env-a")
+
     assert resp.status_code == 204
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args is not None
+    assert mock_audit.await_args.kwargs["action"] == "DATASET_BINDING_DELETE"
+    assert mock_audit.await_args.kwargs["result"] == audit.RESULT_SUCCESS
 
 
 def test_update_workload_requires_version_query_param():

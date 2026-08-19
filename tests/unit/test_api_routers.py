@@ -155,3 +155,37 @@ def test_list_dataset_bindings_filters_by_dataset_name(monkeypatch):
     mock_list.assert_awaited_once()
     assert mock_list.await_args is not None
     assert mock_list.await_args.kwargs["dataset_name"] == "wordcount.raw"
+
+
+def test_create_dataset_binding_records_audit_event(monkeypatch):
+    monkeypatch.setattr(
+        repositories,
+        "create_dataset_binding",
+        AsyncMock(
+            return_value=DatasetBinding(
+                dataset_name="wordcount.raw",
+                environment_name="k8s-remote",
+                kind="path",
+                uri="s3a://portage-phase0/wordcount/input.txt",
+            )
+        ),
+    )
+    mock_audit = AsyncMock()
+    monkeypatch.setattr(audit, "record_audit_event", mock_audit)
+
+    resp = client.post(
+        "/v1/datasets",
+        json={
+            "dataset_name": "wordcount.raw",
+            "environment_name": "k8s-remote",
+            "kind": "path",
+            "uri": "s3a://portage-phase0/wordcount/input.txt",
+        },
+    )
+
+    assert resp.status_code == 201
+    mock_audit.assert_awaited_once()
+    assert mock_audit.await_args is not None
+    assert mock_audit.await_args.kwargs["action"] == "DATASET_BINDING_CREATE"
+    assert mock_audit.await_args.kwargs["resource"] == "wordcount.raw/k8s-remote"
+    assert mock_audit.await_args.kwargs["result"] == audit.RESULT_SUCCESS
