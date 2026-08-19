@@ -58,7 +58,7 @@ config, image repository/tag).
 ## Building the image
 
 ```bash
-docker build -t portage/control-plane:1.0.0 -f Dockerfile .
+docker build -t portage/control-plane:1.0.1 -f Dockerfile .
 ```
 
 One image, two roles — `charts/portage`'s API and reconciler Deployments

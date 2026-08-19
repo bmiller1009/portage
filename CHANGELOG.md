@@ -6,6 +6,18 @@ milestone-by-milestone development history (bugs found, live-verification
 narratives) lives in [`docs/releases/`](docs/releases/), not here — this
 file is the release-facing summary.
 
+## [1.0.1] — 2026-08-19
+
+Patch release. One real behavioral fix plus documentation/wording corrections — no new features, no architecture changes.
+
+### Fixed
+
+- **Certification cross-product bug** (`control_plane/certification.py`): `plane conformance report` could mark an execution+storage combination `PASS` just because each side was independently live-verified elsewhere, without that exact pair ever having been run together (e.g. Databricks + VAST-S3, never actually paired, was incorrectly reportable as `PASS`). Now tracks verified pairs explicitly (`_LIVE_VERIFIED_COMBINATIONS`) instead of computing a cross-product. No public API/CLI/UI contract change — only which combinations earn `PASS`.
+- **`CERTIFIED` terminology**: tightened the definition in README.md and docs/verification/v1.0.0.md — it previously read as "the contract suite itself runs against real infrastructure," which is backwards for suites that are deliberately fake/mock-backed by design. Now requires both a passing contract/conformance suite **and** separate live-infrastructure evidence.
+- **`tests/README.md`** table formatting: restructured dense single-paragraph cells with `<br>`-separated points for readability.
+- **Verification record accuracy**: docs/verification/v1.0.0.md had accreted a contradictory tag-SHA reference from post-tag edits. Corrected the tag's actual target (`0c03415`) and froze that document to the tagged release's state — post-1.0.0 fixes (including this release) now live in [`docs/verification/v1.0.1.md`](docs/verification/v1.0.1.md).
+- Byte-identical output wording and an infrastructure hostname were also cleaned up across several docs ahead of this release — see docs/verification/v1.0.1.md for the full list.
+
 ## [1.0.0] — 2026-08-19
 
 First GA release. Portage's central claim — the same portable Spark

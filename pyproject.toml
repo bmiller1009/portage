@@ -9,7 +9,7 @@ build-backend = "hatchling.build"
 # package name differs. See README.md's Development section for the
 # Project/PyPI-package/CLI naming distinction.
 name = "portage-runtime"
-version = "1.0.0"
+version = "1.0.1"
 description = "Portable Spark Runtime — a control plane for running Apache Spark workloads independently of the infrastructure on which they execute."
 readme = "README.md"
 license = "Apache-2.0"
