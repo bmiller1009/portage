@@ -269,3 +269,33 @@ def test_workload_validate_multiple_environments_mixed_exits_nonzero(monkeypatch
     out = capsys.readouterr().out
     assert "PASS: compatible with environment 'k8s-remote-v2'" in out
     assert "CAPABILITY MISMATCH: azure-dbx-v1: unsupported Spark version: 4.2" in out
+
+
+def test_workload_validate_prints_nothing_extra_without_provider_overrides(monkeypatch, capsys):
+    monkeypatch.setattr(httpx, "post", Mock())
+    plane_workload_validate(str(EXAMPLES_DIR / "wordcount.yaml"), environment=[])
+    out = capsys.readouterr().out
+    assert "PORTABLE WITH PROVIDER-SPECIFIC OVERRIDES" not in out
+
+
+def test_workload_validate_surfaces_provider_overrides(tmp_path, monkeypatch, capsys):
+    """spec §19's own worked example, driven through the actual CLI
+    command — computed locally from the workload's own providerOverrides
+    field, no --environment or network call needed (ADR 0010)."""
+    workload_file = tmp_path / "with-overrides.yaml"
+    workload_file.write_text(
+        (EXAMPLES_DIR / "wordcount.yaml").read_text()
+        + "\nproviderOverrides:\n"
+        "  kubernetes:\n"
+        "    nodeSelector: {}\n"
+        "    tolerations: []\n"
+        "  databricks: {}\n"
+    )
+    monkeypatch.setattr(httpx, "post", Mock())
+
+    plane_workload_validate(str(workload_file), environment=[])
+
+    out = capsys.readouterr().out
+    assert "PORTABLE WITH PROVIDER-SPECIFIC OVERRIDES" in out
+    assert "kubernetes\t2" in out
+    assert "databricks\t0" in out

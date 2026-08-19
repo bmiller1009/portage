@@ -80,7 +80,12 @@ class VastNfsStorageProvider:
         return False
 
     def capabilities(self) -> StorageCapabilitySet:
-        return StorageCapabilitySet(protocol="vast-nfs", path_bindings=True, table_bindings=False)
+        return StorageCapabilitySet(
+            protocol="vast-nfs",
+            path_bindings=True,
+            table_bindings=False,
+            verification="translation_layer_only",
+        )
 
     def volume_mounts(self) -> list[dict]:
         return [

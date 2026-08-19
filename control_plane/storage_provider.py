@@ -5,17 +5,27 @@ informal contract only S3StorageProvider happened to follow.
 """
 
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
 
 
 @dataclass
 class StorageCapabilitySet:
     """Storage provider capability declaration (spec §47's "capability
-    declaration" responsibility)."""
+    declaration" responsibility).
+
+    `verification`: "live_verified" (S3, VAST S3-mode) has actually moved
+    real data against real infrastructure; "translation_layer_only" (ADLS,
+    VAST NFS-mode) is tested against fakes/unit tests only — no Azure
+    subscription or VAST hardware available to this project. Same two-tier
+    model as CapabilitySet.verification (control_plane/execution_provider.py)
+    for the same reason — this project's own honest evidence only supports
+    two tiers today, not a finer-grained certification scale.
+    """
 
     protocol: str
     path_bindings: bool
     table_bindings: bool
+    verification: Literal["live_verified", "translation_layer_only"] = "live_verified"
 
 
 class StorageProvider(Protocol):

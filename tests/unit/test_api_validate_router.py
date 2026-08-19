@@ -35,7 +35,12 @@ def test_validate_returns_valid_true_for_compatible_workload(monkeypatch):
     )
 
     assert resp.status_code == 200
-    assert resp.json() == {"valid": True, "errors": []}
+    assert resp.json() == {
+        "valid": True,
+        "errors": [],
+        "portability_status": "PORTABLE",
+        "provider_overrides": {},
+    }
 
 
 def test_validate_returns_valid_false_with_errors(monkeypatch):
@@ -67,3 +72,26 @@ def test_validate_unknown_environment_returns_422(monkeypatch):
     )
 
     assert resp.status_code == 422
+
+
+def test_validate_passes_through_portability_status(monkeypatch):
+    monkeypatch.setattr(
+        run_service,
+        "validate_workload",
+        AsyncMock(
+            return_value=ValidationResult(
+                valid=True,
+                portability_status="PORTABLE_WITH_OVERRIDES",
+                provider_overrides={"kubernetes": 2, "databricks": 0},
+            )
+        ),
+    )
+
+    resp = client.post(
+        "/v1/validate", json={"workload": _workload_dict(), "environment_name": "k8s-remote"}
+    )
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["portability_status"] == "PORTABLE_WITH_OVERRIDES"
+    assert body["provider_overrides"] == {"kubernetes": 2, "databricks": 0}

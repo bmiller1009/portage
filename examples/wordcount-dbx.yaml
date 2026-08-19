@@ -6,13 +6,14 @@ metadata:
   version: "0.1.0"
 
 runtime:
-  # 4.1, not 4.2 (unlike wordcount.yaml) — same reason as
-  # claims-normalization.yaml (spec §66): no Databricks Runtime ships 4.2
-  # yet (see providers/execution/databricks/provider.py's
-  # _SUPPORTED_SPARK_VERSIONS). Same artifact reference as wordcount.yaml
-  # (same wheel, same code, zero application changes) — only the
-  # portable workload's declared target Spark version differs, which is
-  # exactly what provider translation exists to accommodate.
+  # 4.1, not 4.2 (unlike wordcount.yaml) — same fixture-pinning reasoning
+  # as claims-normalization.yaml (spec §66; Databricks Runtime 19 has
+  # since added Spark 4.2 support too, see
+  # providers/execution/databricks/compatibility.py). Same artifact
+  # reference as wordcount.yaml (same wheel, same code, zero application
+  # changes) — only the portable workload's declared target Spark version
+  # differs, which is exactly what provider translation exists to
+  # accommodate.
   spark: "4.1"
 
 application:

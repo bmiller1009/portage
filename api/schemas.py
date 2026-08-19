@@ -201,6 +201,8 @@ class ValidateRequest(BaseModel):
 class ValidateResponseOut(BaseModel):
     valid: bool
     errors: list[str]
+    portability_status: str = "PORTABLE"
+    provider_overrides: dict[str, int] = {}
 
 
 class ConformanceCompareRequest(BaseModel):

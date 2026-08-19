@@ -980,6 +980,14 @@
           "metadata": {
             "$ref": "#/components/schemas/WorkloadMetadata"
           },
+          "providerOverrides": {
+            "additionalProperties": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Provideroverrides",
+            "type": "object"
+          },
           "requirements": {
             "$ref": "#/components/schemas/RequirementsSpec"
           },
@@ -1113,6 +1121,19 @@
             },
             "title": "Errors",
             "type": "array"
+          },
+          "portability_status": {
+            "default": "PORTABLE",
+            "title": "Portability Status",
+            "type": "string"
+          },
+          "provider_overrides": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "default": {},
+            "title": "Provider Overrides",
+            "type": "object"
           },
           "valid": {
             "title": "Valid",

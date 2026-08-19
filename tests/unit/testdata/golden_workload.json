@@ -1,0 +1,63 @@
+{
+  "apiVersion": "runtime/v1",
+  "application": {
+    "artifact": "artifact://claims-normalization/4.18.2",
+    "entryPoint": "claims.jobs.normalize",
+    "pipelineSpec": null,
+    "type": "python-wheel"
+  },
+  "arguments": [
+    "--business-date",
+    "${RUN_DATE}"
+  ],
+  "datasets": {
+    "inputs": {
+      "claims": {
+        "dataset": "claims.raw"
+      },
+      "reference": {
+        "dataset": "provider.reference"
+      }
+    },
+    "outputs": {
+      "normalized": {
+        "dataset": "claims.normalized"
+      }
+    }
+  },
+  "execution": {
+    "retries": 0,
+    "timeout": "4h"
+  },
+  "kind": "SparkWorkload",
+  "metadata": {
+    "name": "claims-normalization",
+    "version": "4.18.2"
+  },
+  "providerOverrides": {},
+  "requirements": {
+    "dynamicAllocation": false,
+    "gpu": false,
+    "localDisk": false,
+    "sparkConnect": false,
+    "streaming": false
+  },
+  "resources": {
+    "driver": {
+      "cores": 2,
+      "memory": "8Gi"
+    },
+    "executor": {
+      "cores": 4,
+      "memory": "16Gi"
+    },
+    "scaling": {
+      "maxExecutors": 100,
+      "minExecutors": 10
+    }
+  },
+  "runtime": {
+    "profile": null,
+    "spark": "4.1"
+  }
+}

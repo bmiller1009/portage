@@ -55,6 +55,7 @@ from control_plane.execution_provider import (
     RunRequest,
     TerminalProviderError,
     ValidationResult,
+    compute_portability_status,
     match_capabilities,
 )
 from control_plane.run_state import TERMINAL_STATES, RunState
@@ -271,7 +272,13 @@ class KubernetesExecutionProvider:
 
     async def validate(self, workload) -> ValidationResult:
         errors = match_capabilities(workload.workload, await self.capabilities())
-        return ValidationResult(valid=not errors, errors=errors)
+        portability = compute_portability_status(workload.workload)
+        return ValidationResult(
+            valid=not errors,
+            errors=errors,
+            portability_status=portability.status,
+            provider_overrides=portability.overrides_by_provider,
+        )
 
     def build_spark_application(self, run: RunRequest) -> dict:
         """Pure translation function — resolved workload -> SparkApplication

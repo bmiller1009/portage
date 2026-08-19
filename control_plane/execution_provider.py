@@ -5,7 +5,7 @@ providers/execution/databricks for the two Phase 0 implementations.
 """
 
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Literal, Protocol
 
 from control_plane.run_state import RunState
 from spec.workload.v1alpha1 import SparkWorkload
@@ -56,14 +56,63 @@ class LogReference:
 
 
 @dataclass
+class PortabilityStatus:
+    """The result of compute_portability_status() below — a property of
+    the workload definition itself (its own providerOverrides field), not
+    of any particular provider's capabilities."""
+
+    status: Literal["PORTABLE", "PORTABLE_WITH_OVERRIDES"]
+    overrides_by_provider: dict[str, int]
+
+
+def compute_portability_status(workload: SparkWorkload) -> PortabilityStatus:
+    """ADR 0010 / spec §19: a workload with any providerOverrides entries
+    is still valid and schedulable, but its portability claim must be
+    reported honestly rather than as a plain PORTABLE — this is a pure
+    function of the workload's own providerOverrides field, computable
+    offline with no provider or environment involved (spec §19's own
+    example output has no per-provider capability check in it at all,
+    just a count per namespace)."""
+    overrides_by_provider = {
+        provider: len(overrides) for provider, overrides in workload.providerOverrides.items()
+    }
+    status: Literal["PORTABLE", "PORTABLE_WITH_OVERRIDES"] = (
+        "PORTABLE_WITH_OVERRIDES" if any(overrides_by_provider.values()) else "PORTABLE"
+    )
+    return PortabilityStatus(status=status, overrides_by_provider=overrides_by_provider)
+
+
+@dataclass
 class ValidationResult:
     valid: bool
     errors: list[str] = field(default_factory=list)
+    portability_status: Literal["PORTABLE", "PORTABLE_WITH_OVERRIDES"] = "PORTABLE"
+    provider_overrides: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
 class CapabilitySet:
-    """Provider capability declaration (spec §20)."""
+    """Provider capability declaration (spec §20).
+
+    `verification` operationalizes a distinction this project has always
+    made in prose (provider READMEs' "translation-layer prototype, never
+    run against live infrastructure" caveats) but never represented in
+    data: "live_verified" means this provider has actually executed a
+    real workload against real infrastructure (Kubernetes, Databricks —
+    both live-verified since v0.1/v0.3 respectively); "translation_layer_
+    only" means it's tested against fakes/mocks only, no real
+    infrastructure available to this project. Not a claim about whether
+    the *capability values themselves* (spark_versions etc.) are
+    trustworthy — both tiers are still the provider's own honest
+    self-report, matched the same way by match_capabilities() below. Only
+    execution providers are live_verified/translation_layer_only in
+    exactly the same two tiers as storage providers
+    (StorageCapabilitySet, control_plane/storage_provider.py) by design,
+    not because every provider actually falls into only two buckets in
+    general — a third tier isn't backed by real evidence anywhere in this
+    project yet, so adding one now would overclaim precision the
+    underlying data doesn't have.
+    """
 
     spark_versions: list[str]
     languages: list[str]
@@ -72,6 +121,7 @@ class CapabilitySet:
     streaming: bool
     local_disk: bool
     spark_connect: bool
+    verification: Literal["live_verified", "translation_layer_only"] = "live_verified"
 
 
 class RetryableProviderError(Exception):

@@ -112,6 +112,16 @@ class SparkWorkload(BaseModel):
     resources: ResourcesSpec
     execution: ExecutionPolicy
     requirements: RequirementsSpec = Field(default_factory=RequirementsSpec)
+    # Provider-specific escape hatch (spec §19, ADR 0010) — namespaced per
+    # provider name ({"kubernetes": {...}, "databricks": {...}}),
+    # deliberately opaque (each provider interprets its own namespace, if
+    # it interprets one at all; unrelated providers MUST ignore it
+    # entirely). Never consumed by the portable contract itself — its only
+    # effect anywhere in this codebase today is degrading the portability
+    # status reported by control_plane.execution_provider.
+    # compute_portability_status(), never silently altering workload
+    # behavior (ADR 0010's third MUST rule).
+    providerOverrides: dict[str, dict] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _warn_deprecated_api_version(self) -> "SparkWorkload":

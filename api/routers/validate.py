@@ -23,4 +23,9 @@ async def validate_workload(
         result = await run_service.validate_workload(session, body.workload, body.environment_name)
     except repositories.NotFoundError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
-    return ValidateResponseOut(valid=result.valid, errors=result.errors)
+    return ValidateResponseOut(
+        valid=result.valid,
+        errors=result.errors,
+        portability_status=result.portability_status,
+        provider_overrides=result.provider_overrides,
+    )

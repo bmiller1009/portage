@@ -26,6 +26,8 @@ credentials resolved through control_plane.credentials at that point, not
 at provider-construction time.
 """
 
+import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
@@ -45,9 +47,13 @@ from control_plane.execution_provider import (
     RunRequest,
     TerminalProviderError,
     ValidationResult,
+    compute_portability_status,
     match_capabilities,
 )
 from control_plane.run_state import RunState
+from providers.execution.databricks import compatibility
+
+logger = logging.getLogger(__name__)
 
 # Databricks SDK error types spec §26 says are safe to retry (rate limit,
 # transient unavailability, transient server error, timeout) — everything
@@ -77,22 +83,10 @@ _RETRYABLE_DATABRICKS_ERRORS = (
     requests.exceptions.Timeout,
 )
 
-_SUPPORTED_SPARK_VERSIONS = {"4.0", "4.1"}
-
-# Databricks Runtime <-> Apache Spark version compatibility (spec §46),
-# verified against current public docs (docs.databricks.com/aws/en/release-
-# notes/runtime/, checked Aug 2026): Databricks Runtime 17.3 LTS ships
-# Spark 4.0.0; the 18.x series (latest 18.2) ships Spark 4.1.0. No
-# Databricks Runtime ships Spark 4.2 yet, so it's deliberately excluded
-# from _SUPPORTED_SPARK_VERSIONS above — claiming support for it would
-# make validate() return a false PASS for a workload that cannot actually
-# run on any Databricks cluster today. Confirmed live (v0.3) against a
-# real workspace's w.clusters.spark_versions() — these are the exact
-# non-ML/non-Photon/non-GPU scala2.13 keys.
-_SPARK_TO_DBR_CLUSTER_VERSION = {
-    "4.1": "18.2.x-scala2.13",
-    "4.0": "17.3.x-scala2.13",
-}
+# Databricks Runtime <-> Apache Spark version compatibility now lives in
+# compatibility.py, along with the reasoning for why it's a curated table
+# rather than a fully discovery-driven one.
+_DBR_CLUSTER_VERSION_PATTERN = re.compile(r"^\d+(\.\d+)?\.x-[\w.\-]+$")
 
 # Confirmed live (v0.3): environment_version "2" does not support wheel
 # dependency loading for serverless Python-wheel tasks; "4" does.
@@ -170,6 +164,27 @@ class DatabricksProfile:
     # so a profile with no real credentials configured anywhere is still
     # valid for translation-only use (validate(), build_run_submission()).
     credential_reference: dict = field(default_factory=dict)
+    # Explicit-override escape hatch (req: "explicit compatible override ->
+    # accepted", "invalid runtime override -> rejected") — {portable spark
+    # version: DBR cluster-version key}, e.g. {"4.3": "20.x-scala2.13"},
+    # for a workspace running a Databricks Runtime ahead of
+    # compatibility.py's curated table. Only consulted for spark versions
+    # not already in that curated table (see
+    # compatibility.resolve_cluster_version), so it can never silently
+    # shadow a known-good mapping. Validated eagerly in __post_init__
+    # (fails at profile construction, not at first use) since a malformed
+    # override is a configuration mistake, not a runtime condition.
+    dbr_cluster_version_overrides: dict[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        for spark_version, cluster_version in self.dbr_cluster_version_overrides.items():
+            if not _DBR_CLUSTER_VERSION_PATTERN.match(cluster_version):
+                raise ValueError(
+                    f"invalid dbr_cluster_version_overrides entry for Spark {spark_version!r}: "
+                    f"{cluster_version!r} doesn't look like a real Databricks Runtime cluster "
+                    "version key (expected a shape like '19.x-scala2.13' or "
+                    "'17.3.x-scala2.13')"
+                )
 
 
 def _split_entry_point(entry_point: str) -> tuple[str, str]:
@@ -190,6 +205,11 @@ class DatabricksExecutionProvider:
         # see _get_client(). validate()/build_run_submission() never call
         # it, so translation-only use never requires credentials at all.
         self._client = client
+        # (spark_version, cluster_version) pairs already cross-checked this
+        # process's lifetime — compatibility.cross_check_against_workspace()
+        # is a real API call, so this keeps it to once per pair per
+        # long-lived provider instance rather than once per submission.
+        self._cross_checked_versions: set[tuple[str, str]] = set()
 
     def _get_client(self) -> WorkspaceClientLike:
         if self._client is not None:
@@ -207,9 +227,29 @@ class DatabricksExecutionProvider:
         )
         return self._client
 
+    def _cross_check_compatibility_once(self, client: WorkspaceClientLike, spark_version: str) -> None:
+        cluster_version = compatibility.resolve_cluster_version(
+            spark_version, override=self.profile.dbr_cluster_version_overrides.get(spark_version)
+        )
+        if cluster_version is None:
+            return
+        cache_key = (spark_version, cluster_version)
+        if cache_key in self._cross_checked_versions:
+            return
+        self._cross_checked_versions.add(cache_key)
+        warning = compatibility.cross_check_against_workspace(client, spark_version, cluster_version)
+        if warning:
+            logger.warning(warning)
+
     async def validate(self, workload) -> ValidationResult:
         errors = match_capabilities(workload.workload, await self.capabilities())
-        return ValidationResult(valid=not errors, errors=errors)
+        portability = compute_portability_status(workload.workload)
+        return ValidationResult(
+            valid=not errors,
+            errors=errors,
+            portability_status=portability.status,
+            provider_overrides=portability.overrides_by_provider,
+        )
 
     def build_run_submission(self, run: RunRequest) -> dbx_jobs.SubmitTask:
         """Pure translation function — resolved workload -> Jobs API 2.2
@@ -241,9 +281,20 @@ class DatabricksExecutionProvider:
         `sys.argv` when `spark.conf.get()` is rejected, so this needs no
         per-application special-casing beyond that one shared helper."""
         workload = run.resolved.workload
-        cluster_spark_version = _SPARK_TO_DBR_CLUSTER_VERSION.get(
-            workload.runtime.spark, workload.runtime.spark
+        cluster_spark_version = compatibility.resolve_cluster_version(
+            workload.runtime.spark,
+            override=self.profile.dbr_cluster_version_overrides.get(workload.runtime.spark),
         )
+        if cluster_spark_version is None:
+            # validate() (called before submission in both the API's
+            # POST /v1/validate path and the reconciler's own pre-submit
+            # check) should already have caught this via capabilities() —
+            # reaching here means something submitted without validating
+            # first, so fail loudly rather than guess at a cluster version
+            # key that was never confirmed to exist.
+            raise TerminalProviderError(
+                f"no known or overridden Databricks Runtime for Spark {workload.runtime.spark!r}"
+            )
 
         spark_conf = {**run.resolved.storage_config, **run.resolved.dataset_config}
 
@@ -360,8 +411,10 @@ class DatabricksExecutionProvider:
     async def submit(self, run: RunRequest) -> ProviderRun:
         task = self.build_run_submission(run)
         environments = self.build_job_environments(run)
+        client = self._get_client()
+        self._cross_check_compatibility_once(client, run.resolved.workload.runtime.spark)
         try:
-            result = self._get_client().jobs.submit(
+            result = client.jobs.submit(
                 run_name=f"{run.resolved.workload.metadata.name}-{run.run_id}",
                 tasks=[task],
                 environments=environments or None,
@@ -426,12 +479,27 @@ class DatabricksExecutionProvider:
         )
 
     async def capabilities(self) -> CapabilitySet:
+        # Curated table plus any operator-configured overrides (spec: "an
+        # explicit compatible override -> accepted") — a workload
+        # targeting an override-only Spark version must pass
+        # match_capabilities() the same way one targeting a curated-table
+        # version does, or the override would be accepted at submission
+        # but rejected at validate(), an inconsistency no operator should
+        # have to work around.
+        spark_versions = compatibility.SUPPORTED_SPARK_VERSIONS | set(
+            self.profile.dbr_cluster_version_overrides
+        )
         return CapabilitySet(
-            spark_versions=sorted(_SUPPORTED_SPARK_VERSIONS),
+            spark_versions=sorted(spark_versions),
             languages=["python", "jvm"],
             dynamic_allocation=False,
             gpu=False,
             streaming=False,
             local_disk=True,
             spark_connect=False,
+            # Real live runs since v0.3 (OAuth M2M against a real
+            # workspace) — not a translation-layer prototype today, even
+            # though this module's own header docstring predates that and
+            # hasn't caught up (tracked separately, doc-audit scope).
+            verification="live_verified",
         )

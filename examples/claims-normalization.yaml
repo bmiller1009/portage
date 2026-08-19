@@ -6,11 +6,12 @@ metadata:
   version: "4.18.2"
 
 runtime:
-  # 4.1, not 4.2 (unlike wordcount.yaml) — this is the cross-provider
-  # hero-demo fixture (spec §66), and 4.1 is the newest Spark version both
-  # the Kubernetes Spark Operator and Databricks Runtime actually support
-  # today (no Databricks Runtime ships 4.2 yet, see
-  # providers/execution/databricks/provider.py's _SUPPORTED_SPARK_VERSIONS).
+  # 4.1 — this is the cross-provider hero-demo fixture (spec §66); 4.1 was
+  # the newest Spark version both the Kubernetes Spark Operator and
+  # Databricks Runtime supported when this workload was first built (DBR
+  # 19 has since added Spark 4.2 support — see
+  # providers/execution/databricks/compatibility.py — but there's no need
+  # to churn this pinned fixture version just because a newer one exists).
   spark: "4.1"
 
 application:

@@ -13,6 +13,7 @@ import typer
 from pydantic import ValidationError
 
 from control_plane import version as portage_version
+from control_plane.execution_provider import compute_portability_status
 from control_plane.run_state import TERMINAL_STATES, RunState
 from spec.workload.v1alpha1 import parse_workload
 
@@ -130,6 +131,15 @@ def workload_validate(
         typer.echo(f"FAIL: {file} is not a valid workload\n{e}")
         raise typer.Exit(code=1) from e
     typer.echo(f"PASS: {file} ({workload.metadata.name}, spark {workload.runtime.spark})")
+
+    # Portability status (spec §19, ADR 0010) is a property of the
+    # workload's own providerOverrides field — computable offline, no
+    # --environment or API call needed, unlike the capability checks below.
+    portability = compute_portability_status(workload)
+    if portability.status == "PORTABLE_WITH_OVERRIDES":
+        typer.echo("PORTABLE WITH PROVIDER-SPECIFIC OVERRIDES:")
+        for provider_name, count in portability.overrides_by_provider.items():
+            typer.echo(f"  {provider_name}\t{count}")
 
     any_failed = False
     for env_name in environment:

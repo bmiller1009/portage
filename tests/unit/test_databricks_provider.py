@@ -85,10 +85,10 @@ def resolved_run() -> RunRequest:
 @pytest.fixture
 def resolved_jar_run() -> RunRequest:
     # examples/wordcount-jar.yaml is spark "4.2" (fine for its primary,
-    # Kubernetes-side use — the K8s Spark Operator supports 4.0-4.2). No
-    # Databricks Runtime ships Spark 4.2 yet (see _SUPPORTED_SPARK_VERSIONS),
-    # so this Databricks-specific fixture overrides just the version rather
-    # than changing the shared example file.
+    # Kubernetes-side use — the K8s Spark Operator supports 4.0-4.2).
+    # Overridden to "4.1" here deliberately, as an independent regression
+    # case from the dedicated Spark-4.2 tests below (a Databricks-specific
+    # fixture override rather than changing the shared example file).
     workload = parse_workload(EXAMPLES_DIR / "wordcount-jar.yaml")
     workload = workload.model_copy(update={"runtime": workload.runtime.model_copy(update={"spark": "4.1"})})
     resolved = ResolvedWorkload(workload=workload, dataset_config={}, environment_name="databricks-mock")
@@ -444,18 +444,69 @@ def test_validate_rejects_unsupported_spark_version(profile, resolved_run):
     assert result.valid is False
 
 
-def test_validate_rejects_spark_4_2(profile, resolved_run):
-    """No Databricks Runtime ships Spark 4.2 yet (checked Aug 2026) —
-    regression test for the runtime compatibility matrix: this must not
-    silently PASS just because Kubernetes' examples/wordcount.yaml (which
-    resolved_run is built from) happens to declare spark: "4.2"."""
+def test_validate_accepts_spark_4_2(profile, resolved_run):
+    """Databricks Runtime 19 reached GA 2026-07-23, shipping Spark 4.2.0
+    (confirmed live against a real workspace's w.clusters.spark_versions()
+    during v1.0.0 release hardening) — Spark 4.2 is a real, currently-
+    supported combination, not a future/aspirational one."""
     resolved_run.resolved.workload.runtime.spark = "4.2"
     provider = DatabricksExecutionProvider(profile)
 
     result = asyncio.run(provider.validate(resolved_run.resolved))
 
-    assert result.valid is False
-    assert "4.2" in result.errors[0]
+    assert result.valid is True
+
+
+def test_build_run_submission_maps_spark_4_2_to_dbr_19(profile, resolved_run):
+    resolved_run.resolved.workload.runtime.spark = "4.2"
+    provider = DatabricksExecutionProvider(profile)
+
+    task = provider.build_run_submission(resolved_run)
+
+    assert task.new_cluster is not None
+    assert task.new_cluster.spark_version == "19.x-scala2.13"
+
+
+def test_build_run_submission_maps_spark_4_1_to_dbr_18_2(profile, resolved_run):
+    """Regression: the 4.2 addition must not disturb the existing 4.1
+    mapping."""
+    resolved_run.resolved.workload.runtime.spark = "4.1"
+    provider = DatabricksExecutionProvider(profile)
+
+    task = provider.build_run_submission(resolved_run)
+
+    assert task.new_cluster is not None
+    assert task.new_cluster.spark_version == "18.2.x-scala2.13"
+
+
+def test_validate_accepts_spark_version_covered_by_explicit_override(profile, resolved_run):
+    """An operator on a workspace running a Databricks Runtime ahead of
+    this project's curated compatibility table can unblock a newer Spark
+    version on their own authority, without Portage itself asserting the
+    mapping is correct."""
+    profile = DatabricksProfile(
+        host=profile.host,
+        cluster_node_type_id=profile.cluster_node_type_id,
+        dbr_cluster_version_overrides={"4.3": "20.x-scala2.13"},
+    )
+    resolved_run.resolved.workload.runtime.spark = "4.3"
+    provider = DatabricksExecutionProvider(profile)
+
+    result = asyncio.run(provider.validate(resolved_run.resolved))
+    task = provider.build_run_submission(resolved_run)
+
+    assert result.valid is True
+    assert task.new_cluster is not None
+    assert task.new_cluster.spark_version == "20.x-scala2.13"
+
+
+def test_invalid_dbr_cluster_version_override_is_rejected():
+    with pytest.raises(ValueError, match="doesn't look like a real Databricks Runtime"):
+        DatabricksProfile(
+            host="https://example.databricks.com",
+            cluster_node_type_id="i3.xlarge",
+            dbr_cluster_version_overrides={"4.3": "not-a-real-cluster-version"},
+        )
 
 
 def test_validate_rejects_dynamic_allocation_requirement(profile, resolved_run):
@@ -478,4 +529,23 @@ def test_capabilities_reports_no_dynamic_allocation(profile):
 def test_capabilities_reports_current_supported_spark_versions(profile):
     provider = DatabricksExecutionProvider(profile)
     caps = asyncio.run(provider.capabilities())
-    assert caps.spark_versions == ["4.0", "4.1"]
+    assert caps.spark_versions == ["4.0", "4.1", "4.2"]
+
+
+def test_capabilities_includes_override_spark_versions():
+    profile = DatabricksProfile(
+        host="https://example.databricks.com",
+        cluster_node_type_id="i3.xlarge",
+        dbr_cluster_version_overrides={"4.3": "20.x-scala2.13"},
+    )
+    provider = DatabricksExecutionProvider(profile)
+    caps = asyncio.run(provider.capabilities())
+    assert caps.spark_versions == ["4.0", "4.1", "4.2", "4.3"]
+
+
+def test_capabilities_reports_live_verified():
+    provider = DatabricksExecutionProvider(
+        DatabricksProfile(host="https://example.databricks.com", cluster_node_type_id="i3.xlarge")
+    )
+    caps = asyncio.run(provider.capabilities())
+    assert caps.verification == "live_verified"
