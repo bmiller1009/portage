@@ -48,8 +48,13 @@ python -m pytest tests/chaos -v -s
   port-forwards the API (`api_base_url`/`api_client`), and pod/Deployment
   helpers (`delete_pod`, `wait_for_ready_replicas`,
   `wait_for_pod_count`, `wait_for_terminal_state`).
-- `test_idempotent_submission.py` — concurrent duplicate `POST /v1/runs`
-  with the same `Idempotency-Key`, racing across both real API replicas.
+- `test_idempotent_submission.py` — two distinct idempotency scenarios:
+  concurrent duplicate `POST /v1/runs` with the same `Idempotency-Key`
+  racing across both real API replicas, and (v1.0.0) a client whose own
+  connection times out before it sees the response, retrying — a
+  different failure shape (the client doesn't know whether the first
+  attempt landed, rather than two attempts racing each other) — proving
+  both land on exactly one run.
 - `test_control_plane_recovery.py` — kills the sole API or reconciler pod
   (scaled to 1 replica first, so the kill isn't masked by the other HA
   replica) mid-run and confirms recovery.
@@ -69,6 +74,24 @@ python -m pytest tests/chaos -v -s
   retryable in `providers/execution/kubernetes/provider.py`. See the
   module docstring and [#57](https://github.com/bmiller1009/portage/issues/57)
   for the full history.
+
+## Known, deliberate limitation: no Databricks-API-interruption test
+
+`test_provider_outage_recovery.py` fault-injects a genuine Kubernetes API
+partition (an unreachable address baked into a throwaway reconciler pod)
+because that's a real, controllable failure mode against a
+self-hosted cluster this project fully controls. There is no equivalent
+test for Databricks: its Jobs API is a hosted third-party service with no
+fault-injectable surface this project can reach into (no way to make
+*just* the Databricks control plane unreachable without also cutting the
+reconciler's own network access entirely, which wouldn't isolate anything
+provider-specific). `providers/execution/databricks/provider.py`'s
+`requests.exceptions.ConnectionError`/`Timeout` handling is applied by
+analogy to the Kubernetes provider's live-confirmed `MaxRetryError` fix
+(same comment, same reasoning) — a principled extrapolation, not
+independently live-verified, and it stays that way; forcing a synthetic
+test here wouldn't prove anything a real partition would actually
+exercise.
 
 ## Real bugs this suite found and fixed (not hypothetical)
 
