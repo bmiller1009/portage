@@ -80,4 +80,11 @@ testpaths = ["tests/unit"]
 # packages (their own pyproject.toml, run inside the Spark container
 # image, not the portage venv) — pyspark is intentionally not a portage
 # dependency, so they're out of scope here.
-exclude = ["examples/wordcount_app", "examples/iceberg_demo_app", ".venv", "build", "dist"]
+exclude = [
+    "examples/wordcount_app",
+    "examples/iceberg_demo_app",
+    "integrations/airflow",
+    ".venv",
+    "build",
+    "dist",
+]
