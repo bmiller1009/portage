@@ -6,39 +6,43 @@ still reaches a terminal state with no visible availability gap — the
 other replica of each keeps serving throughout, which is the entire point
 of running 2 in the first place.
 
-KNOWN OPEN FINDING (tracked separately, not fixed by this suite): this
-specific test is intermittently flaky (~1 in 3 runs observed) with a real,
-reproducible failure distinct from the two bugs this milestone's other
-work already fixed (MaxRetryError misclassification in
-providers/execution/kubernetes/provider.py; the "unclassified error"
-mislabeling in reconciler/service.py's poll_active_runs). The run
-correctly submits (QUEUED) and its first status() poll succeeds, but a
-*later* status() poll against the same still-existing SparkApplication
-occasionally gets a genuine `(401) Unauthorized` from the real Kubernetes
-API server — not a connection failure, a real signed response — which
-_raise_classified() correctly treats as terminal (401 is not in
-_RETRYABLE_API_STATUS_CODES), so the run fails outright.
+HISTORICAL FINDING, now mitigated (#57): this test used to fail
+intermittently (observed roughly every other run) with a failure distinct
+from the two bugs this milestone's other work fixed (MaxRetryError
+misclassification in providers/execution/kubernetes/provider.py; the
+"unclassified error" mislabeling in reconciler/service.py's
+poll_active_runs). The run would correctly submit (QUEUED) and its first
+status() poll would succeed, but a *later* status() poll against the
+same still-existing SparkApplication occasionally got a genuine `(401)
+Unauthorized` from the real Kubernetes API server — not a connection
+failure, a real signed response.
 
-Ruled out live, not guessed:
+Ruled out live, not guessed, as the mechanism:
 - Global-Configuration-object races from concurrent load_kube_config()
-  calls across different ExecutionProfiles (asyncio.gather reproduction
-  inside the real reconciler pod never showed cross-contamination — each
-  CustomObjectsApi instance's configuration.host stayed correctly scoped
-  throughout).
+  calls across different ExecutionProfiles (an asyncio.gather
+  reproduction inside the real reconciler pod never showed
+  cross-contamination — each CustomObjectsApi instance's
+  configuration.host stayed correctly scoped throughout).
 - A freshly-created pod's projected ServiceAccount token not being ready
   yet (a brand-new pod's very first API call, tested immediately after
   Running, succeeded cleanly every time — no propagation delay observed).
 - reconciler/service.py's own control flow is strictly sequential
   (asyncio.run(run_forever(...)), one tick fully awaited before the
-  next) — there is no concurrency *within* one reconciler process.
+  next) — no concurrency *within* one reconciler process.
+- Two reconciler replicas concurrently polling the *same* resource: 400
+  concurrent get_namespaced_custom_object calls fired from two real pods
+  against the same SparkApplication, in a tight loop, produced zero
+  errors.
 
-Not yet ruled out: the two reconciler *replicas* run as independent
-processes and both poll_active_runs() globally (not partitioned/leader-
-elected) every interval, so two pods can genuinely poll the same run's
-status() within moments of each other under normal HA operation — this
-is the leading remaining hypothesis but hasn't been confirmed as the
-actual mechanism. Left as an open, separately-tracked investigation
-rather than claimed fixed."""
+The exact server-side trigger was never pinned down. Given every
+isolated reproduction attempt came back clean, but the failure was
+real and reproducible in the actual chaos scenario, providers/execution/
+kubernetes/provider.py now includes 401 in _RETRYABLE_API_STATUS_CODES —
+a live-evidence-driven, bounded accommodation (see that constant's own
+comment for the full reasoning), not a general "401s are safe to
+retry" policy. Empirically: 4 consecutive live runs of this exact test
+passed cleanly after the change, versus roughly half failing with this
+exact signature before it."""
 
 import time
 

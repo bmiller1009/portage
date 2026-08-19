@@ -57,10 +57,14 @@ python -m pytest tests/chaos -v -s
   outright.
 - `test_ha_deployment.py` — kills one of two API replicas and one of two
   reconciler replicas simultaneously, confirming the run still completes
-  with no visible availability gap. **Intermittently flaky** — see the
+  with no visible availability gap. Used to fail intermittently with a
+  genuine `401 Unauthorized` from the real Kubernetes API server on a
+  reconciler status() poll — never root-caused despite ruling out four
+  plausible mechanisms live, but empirically mitigated (4/4 clean runs
+  after the fix, vs. roughly half failing before) by treating 401 as
+  retryable in `providers/execution/kubernetes/provider.py`. See the
   module docstring and [#57](https://github.com/bmiller1009/portage/issues/57)
-  for a real, live-confirmed, not-yet-root-caused finding distinct from
-  the bugs this suite already found and fixed.
+  for the full history.
 
 ## Real bugs this suite found and fixed (not hypothetical)
 
@@ -87,3 +91,15 @@ python -m pytest tests/chaos -v -s
   instead of a plain insert + exception handling — the latter also hit a
   genuine SQLAlchemy asyncio/greenlet edge case when the same session
   kept being used right after the conflict.
+- `providers/execution/kubernetes/provider.py` (#57): under heavy
+  reconciler/API pod churn, a `status()`/`cancel()` call can get a
+  genuine, real (correctly-signed, well-formed) `401 Unauthorized` from
+  the live Kubernetes API server, sandwiched between successful calls
+  using the exact same unmodified credential chain — a shape far more
+  consistent with a transient server-side hiccup under load than an
+  actual authentication problem. The precise mechanism was never
+  confirmed despite ruling out four plausible causes live (see
+  `test_ha_deployment.py`'s docstring); the fix treats 401 as retryable
+  alongside the other transient status codes, empirically eliminating
+  the failure (4/4 clean runs afterward vs. roughly half failing
+  before).

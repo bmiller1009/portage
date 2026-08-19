@@ -216,7 +216,7 @@ def test_submit_recovers_from_already_exists_conflict(profile, resolved_run):
     assert fake_api.get_call_count == 1
 
 
-@pytest.mark.parametrize("status", [429, 500, 502, 503, 504])
+@pytest.mark.parametrize("status", [401, 429, 500, 502, 503, 504])
 def test_submit_raises_retryable_on_transient_api_status(profile, resolved_run, status):
     from kubernetes.client.exceptions import ApiException
 

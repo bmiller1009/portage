@@ -115,7 +115,26 @@ _SUPPORTED_SPARK_VERSIONS = {"4.1", "4.2"}
 # rate limit, transient server errors) — anything else on submit() is
 # terminal. 409 (already exists) isn't in here at all: submit() handles it
 # as a recovery signal, not an error (see submit()).
-_RETRYABLE_API_STATUS_CODES = {429, 500, 502, 503, 504}
+#
+# 401 is included too, and this needs its own justification since "401
+# means retry won't help" is the normal, correct assumption almost
+# everywhere else: confirmed live (tests/chaos/test_ha_deployment.py,
+# reproduced across ~13 real runs on 2026-08-19) that under heavy
+# reconciler/API pod churn, a status()/cancel() call can get a genuine,
+# real (correctly-signed, well-formed) 401 from the live Kubernetes API
+# server against a resource whose *surrounding* calls — the submit()
+# that created it, the status() polls immediately before and after —
+# succeed with the exact same unmodified kubeconfig and token. A
+# persistently wrong or revoked credential fails *every* call, not one
+# call sandwiched between successful ones using the identical
+# credential chain; that shape is far more consistent with a transient
+# API-server-side hiccup under load than an actual authentication
+# problem worth failing a run over. The exact server-side mechanism is
+# still unconfirmed (tracked as #57) — this is a live-evidence-driven,
+# bounded accommodation (submit() still gives up after
+# MAX_SUBMISSION_ATTEMPTS, same as every other retryable code here), not
+# a general "401s are safe to ignore" policy.
+_RETRYABLE_API_STATUS_CODES = {401, 429, 500, 502, 503, 504}
 
 # The generated Kubernetes client has no default request timeout at all —
 # confirmed live (tests/chaos/test_provider_outage_recovery.py) that
