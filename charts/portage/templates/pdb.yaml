@@ -1,0 +1,31 @@
+{{- if and .Values.podDisruptionBudget.enabled (gt (int .Values.api.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "portage.fullname" . }}-api
+  labels:
+    {{- include "portage.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "portage.labels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+{{- end }}
+---
+{{- if and .Values.podDisruptionBudget.enabled (gt (int .Values.reconciler.replicaCount) 1) }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "portage.fullname" . }}-reconciler
+  labels:
+    {{- include "portage.labels" . | nindent 4 }}
+    app.kubernetes.io/component: reconciler
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "portage.labels" . | nindent 6 }}
+      app.kubernetes.io/component: reconciler
+{{- end }}

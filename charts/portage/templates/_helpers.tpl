@@ -31,3 +31,19 @@ pass straight through via envFrom instead.
     name: {{ .Values.credentials.existingSecretName }}
 {{- end }}
 {{- end -}}
+
+{{- define "portage.apiServiceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
+{{ include "portage.fullname" . }}-api
+{{- else -}}
+default
+{{- end -}}
+{{- end -}}
+
+{{- define "portage.reconcilerServiceAccountName" -}}
+{{- if .Values.serviceAccount.create -}}
+{{ include "portage.fullname" . }}-reconciler
+{{- else -}}
+default
+{{- end -}}
+{{- end -}}

@@ -35,7 +35,7 @@ from api.routers import (
 from control_plane import metrics
 from control_plane import version as portage_version
 
-app = FastAPI(title="Portage Control Plane")
+app = FastAPI(title="Portage Control Plane", version=portage_version.get_version())
 
 # ui/ (spec §32) is a separate Vite dev server on its own port, so it's a
 # cross-origin caller of this API by construction — allowing all origins

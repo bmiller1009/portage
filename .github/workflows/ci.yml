@@ -27,6 +27,56 @@ jobs:
       - name: Unit tests
         run: pytest tests/unit -v
 
+      - name: OpenAPI schema drift check
+        run: |
+          python scripts/export_openapi.py
+          git diff --exit-code openapi.json || (echo "::error::openapi.json is out of date — run 'python scripts/export_openapi.py' and commit the result." && exit 1)
+
+  package-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build sdist + wheel
+        run: |
+          pip install build
+          python -m build
+
+      - name: Install wheel into a clean venv
+        run: |
+          python -m venv /tmp/portage-wheel-venv
+          /tmp/portage-wheel-venv/bin/pip install dist/*.whl
+
+      - name: Smoke-test the installed CLI (not editable-source execution)
+        run: |
+          /tmp/portage-wheel-venv/bin/plane --version
+          /tmp/portage-wheel-venv/bin/plane --help
+
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build container image
+        run: docker build -t portage/control-plane:ci .
+
+  helm-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+
+      - name: helm lint
+        run: helm lint charts/portage
+
+      - name: helm template
+        run: helm template charts/portage --set database.existingSecretName=ci-placeholder
+
   persistence-tests:
     runs-on: ubuntu-latest
     services:

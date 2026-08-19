@@ -17,6 +17,7 @@ spec:
         {{- include "portage.labels" . | nindent 8 }}
         app.kubernetes.io/component: reconciler
     spec:
+      serviceAccountName: {{ include "portage.reconcilerServiceAccountName" . }}
       containers:
         - name: reconciler
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"

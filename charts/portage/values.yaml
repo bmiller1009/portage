@@ -3,6 +3,19 @@ image:
   tag: "1.0.0"
   pullPolicy: IfNotPresent
 
+# Dedicated ServiceAccounts for the api/reconciler Deployments, instead of
+# both running under the namespace's implicit `default` (the reconciler's
+# RBAC grant below binds to this identity specifically, not `default`).
+serviceAccount:
+  create: true
+
+# minAvailable: 1 PodDisruptionBudgets, one per component — only rendered
+# when that component's own replicaCount is more than 1, since a PDB with
+# minAvailable: 1 against a single-replica Deployment would block voluntary
+# node draining entirely rather than protect availability.
+podDisruptionBudget:
+  enabled: true
+
 api:
   replicaCount: 2
   port: 8000
@@ -21,12 +34,22 @@ reconciler:
   # load_kube_config(), never load_incluster_config()). Only useful when
   # a kubernetes ExecutionProfile targets the *same* cluster the
   # reconciler runs in; register that profile with
-  # config.kubeconfig_path = "/etc/portage/kubeconfig" to use it. The
-  # ServiceAccount itself still needs RBAC granted for whatever it should
-  # be able to do in the target namespace(s) — not this chart's concern,
-  # since that grant is workload/namespace-specific.
+  # config.kubeconfig_path = "/etc/portage/kubeconfig" to use it.
   inClusterKubeconfig:
     enabled: false
+  # Opt-in (default off, matching this chart's other off-by-default knobs)
+  # RBAC grant for the reconciler's own ServiceAccount — get/list/watch/
+  # create/update/patch/delete on sparkapplications.spark.apache.org, plus
+  # get/list/watch on pods/pods/log — the exact permissions
+  # providers/execution/kubernetes/provider.py needs. Off by default
+  # because which namespace(s) Spark workloads actually run in is
+  # workload/environment-specific, not something this chart can assume;
+  # enable it once you know where. Grants into the release namespace by
+  # default; list any other namespaces Spark workloads run in under
+  # additionalNamespaces.
+  rbac:
+    create: false
+    additionalNamespaces: []
 
 # spec §46: "external/HA PostgreSQL" — bring your own, not bundled by this
 # chart. existingSecretName must name a Secret (created out-of-band) with

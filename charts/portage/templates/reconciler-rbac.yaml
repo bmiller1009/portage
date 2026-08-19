@@ -1,0 +1,41 @@
+{{- if .Values.reconciler.rbac.create }}
+{{- $fullname := include "portage.fullname" . }}
+{{- $saName := include "portage.reconcilerServiceAccountName" . }}
+{{- $labels := include "portage.labels" . }}
+{{- $namespaces := prepend .Values.reconciler.rbac.additionalNamespaces .Release.Namespace }}
+{{- range $ns := $namespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $fullname }}-reconciler
+  namespace: {{ $ns }}
+  labels:
+    {{- $labels | nindent 4 }}
+    app.kubernetes.io/component: reconciler
+rules:
+  - apiGroups: ["spark.apache.org"]
+    resources: ["sparkapplications"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $fullname }}-reconciler
+  namespace: {{ $ns }}
+  labels:
+    {{- $labels | nindent 4 }}
+    app.kubernetes.io/component: reconciler
+subjects:
+  - kind: ServiceAccount
+    name: {{ $saName }}
+    namespace: {{ $.Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ $fullname }}-reconciler
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end }}
