@@ -29,6 +29,7 @@ at provider-construction time.
 from dataclasses import dataclass, field
 from typing import Any, Protocol, cast
 
+import requests
 from databricks.sdk import errors as dbx_errors
 from databricks.sdk.errors.base import DatabricksError
 from databricks.sdk.service import compute as dbx_compute
@@ -53,6 +54,18 @@ from control_plane.run_state import RunState
 # else DatabricksError-derived (bad request, permission denied, not found,
 # unauthenticated, ...) is terminal. Confirmed real via SDK introspection
 # (databricks.sdk.errors.STATUS_CODE_MAPPING), not guessed.
+#
+# requests.exceptions.ConnectionError/Timeout cover the workspace being
+# genuinely unreachable (DNS failure, connection refused/timed out) —
+# distinct from every DatabricksError above, which only wraps a response
+# the workspace actually sent. The SDK's HTTP layer is requests-based and
+# raises these directly, uncaught by any DatabricksError clause. Applied
+# by the same reasoning as the identical, live-confirmed gap in
+# providers/execution/kubernetes/provider.py's MaxRetryError handling
+# (tests/chaos/test_provider_outage_recovery.py) — not independently
+# live-verified against a real unreachable Databricks workspace, since
+# doing so would require disrupting the only live-verified workspace this
+# project has.
 _RETRYABLE_DATABRICKS_ERRORS = (
     dbx_errors.TooManyRequests,
     dbx_errors.RequestLimitExceeded,
@@ -60,6 +73,8 @@ _RETRYABLE_DATABRICKS_ERRORS = (
     dbx_errors.InternalError,
     dbx_errors.DeadlineExceeded,
     dbx_errors.OperationTimeout,
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
 )
 
 _SUPPORTED_SPARK_VERSIONS = {"4.0", "4.1"}

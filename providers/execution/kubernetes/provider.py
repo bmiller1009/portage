@@ -44,6 +44,7 @@ from typing import Any, NoReturn, Protocol, cast
 from kubernetes import client as k8s_client
 from kubernetes import config as k8s_config
 from kubernetes.client.exceptions import ApiException
+from urllib3.exceptions import MaxRetryError
 
 from control_plane.execution_provider import (
     CapabilitySet,
@@ -116,6 +117,15 @@ _SUPPORTED_SPARK_VERSIONS = {"4.1", "4.2"}
 # as a recovery signal, not an error (see submit()).
 _RETRYABLE_API_STATUS_CODES = {429, 500, 502, 503, 504}
 
+# The generated Kubernetes client has no default request timeout at all —
+# confirmed live (tests/chaos/test_provider_outage_recovery.py) that
+# without one, a call against a genuinely unreachable API server just
+# hangs on the underlying TCP connect for however long the OS/network
+# path takes (which can be minutes, or indefinite), leaving a run stuck
+# in SUBMITTING far longer than any reasonable retry budget rather than
+# promptly raising MaxRetryError so _raise_unreachable() can classify it.
+_API_REQUEST_TIMEOUT_SECONDS = 30
+
 
 def _raise_classified(e: ApiException) -> NoReturn:
     """Shared by status()/cancel() as well as submit() (spec §56's "network
@@ -127,21 +137,35 @@ def _raise_classified(e: ApiException) -> NoReturn:
     raise TerminalProviderError(str(e)) from e
 
 
+def _raise_unreachable(e: MaxRetryError) -> NoReturn:
+    """The API server itself couldn't be reached at all (DNS failure,
+    connection refused/timed out) — urllib3 raises MaxRetryError for this
+    directly, never an ApiException (that class only wraps a response the
+    server actually sent), so submit()/status()/cancel() need a second
+    except clause to classify it. Always retryable: a genuine outage
+    (spec §71's "provider outage recovery") deserves the same treatment
+    as a transient 503 confirmed live — treating it as terminal instead
+    (the prior behavior, caught only by the reconciler's unclassified-
+    exception fallback) turned a temporary network partition into a
+    permanently FAILED run."""
+    raise RetryableProviderError(str(e)) from e
+
+
 class CustomObjectsApiLike(Protocol):
     """The subset of kubernetes.client.CustomObjectsApi this provider uses —
     a Protocol so unit tests can inject a fake without subclassing the real
     (heavily code-generated) SDK client."""
 
     def create_namespaced_custom_object(
-        self, *, group: str, version: str, namespace: str, plural: str, body: dict
+        self, *, group: str, version: str, namespace: str, plural: str, body: dict, _request_timeout: int
     ) -> dict: ...
 
     def get_namespaced_custom_object(
-        self, *, group: str, version: str, namespace: str, plural: str, name: str
+        self, *, group: str, version: str, namespace: str, plural: str, name: str, _request_timeout: int
     ) -> dict: ...
 
     def delete_namespaced_custom_object(
-        self, *, group: str, version: str, namespace: str, plural: str, name: str
+        self, *, group: str, version: str, namespace: str, plural: str, name: str, _request_timeout: int
     ) -> Any: ...
 
 
@@ -328,6 +352,7 @@ class KubernetesExecutionProvider:
                 namespace=self.profile.namespace,
                 plural=SPARK_APPLICATION_PLURAL,
                 body=manifest,
+                _request_timeout=_API_REQUEST_TIMEOUT_SECONDS,
             )
             return ProviderRun(provider_run_id=result["metadata"]["name"], raw=result)
         except ApiException as e:
@@ -345,9 +370,12 @@ class KubernetesExecutionProvider:
                     namespace=self.profile.namespace,
                     plural=SPARK_APPLICATION_PLURAL,
                     name=manifest["metadata"]["name"],
+                    _request_timeout=_API_REQUEST_TIMEOUT_SECONDS,
                 )
                 return ProviderRun(provider_run_id=existing["metadata"]["name"], raw=existing)
             _raise_classified(e)
+        except MaxRetryError as e:
+            _raise_unreachable(e)
 
     async def status(self, provider_run_id: str) -> ProviderStatus:
         try:
@@ -358,9 +386,12 @@ class KubernetesExecutionProvider:
                 namespace=self.profile.namespace,
                 plural=SPARK_APPLICATION_PLURAL,
                 name=provider_run_id,
+                _request_timeout=_API_REQUEST_TIMEOUT_SECONDS,
             )
         except ApiException as e:
             _raise_classified(e)
+        except MaxRetryError as e:
+            _raise_unreachable(e)
         status_obj = obj.get("status") or {}
         native_state = status_obj.get("currentState", {}).get("currentStateSummary")
         if native_state is None:
@@ -385,6 +416,7 @@ class KubernetesExecutionProvider:
                 namespace=self.profile.namespace,
                 plural=SPARK_APPLICATION_PLURAL,
                 name=provider_run_id,
+                _request_timeout=_API_REQUEST_TIMEOUT_SECONDS,
             )
         except ApiException as e:
             if e.status == 404:
@@ -393,6 +425,8 @@ class KubernetesExecutionProvider:
                 # ensure absence, so this is success, not an error.
                 return
             _raise_classified(e)
+        except MaxRetryError as e:
+            _raise_unreachable(e)
 
     async def logs(self, provider_run_id: str) -> LogReference:
         # The label is spark.operator/spark-app-name (this operator's own

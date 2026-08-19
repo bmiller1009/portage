@@ -18,6 +18,12 @@ dependencies = [
     "boto3>=1.35",
     "kubernetes>=31.0",
     "databricks-sdk>=0.36",
+    # Imported directly (not just a databricks-sdk transitive dep) by
+    # providers/execution/databricks/provider.py to classify a genuinely
+    # unreachable workspace as retryable (spec §71's "provider outage
+    # recovery") — pinned explicitly rather than relying on the sdk's own
+    # transitive version.
+    "requests>=2.32",
     "azure-storage-file-datalake>=12.14",
     "azure-identity>=1.15",
     "sqlalchemy[asyncio]>=2.0",

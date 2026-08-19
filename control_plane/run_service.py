@@ -34,7 +34,19 @@ async def create_run(
     """Creates a new run in ACCEPTED state, or — if idempotency_key was
     already used — returns the existing run instead of creating a
     duplicate (spec §25). Returns (run, created) so the API layer can
-    report 202 for a fresh submission vs. 200 for a replayed one."""
+    report 202 for a fresh submission vs. 200 for a replayed one.
+
+    The initial get-then-create below is not itself atomic, so two
+    genuinely concurrent calls with the same idempotency_key can both
+    pass it and both create a Run — confirmed live
+    (tests/chaos/test_idempotent_submission.py) against the two real API
+    replicas charts/portage deploys. The loser is caught at the very end,
+    where create_idempotency_key's atomic INSERT ... ON CONFLICT DO
+    NOTHING is the real tie-breaker: the loser's run is deleted (never
+    having been returned to any caller) and the winner's run is returned
+    instead, so every caller still sees exactly one logical run regardless
+    of which request "wins" the race.
+    """
     if idempotency_key is not None:
         existing_key = await repositories.get_idempotency_key(session, idempotency_key)
         if existing_key is not None:
@@ -56,7 +68,12 @@ async def create_run(
         session, run_id=run.id, from_state=None, to_state=RunState.ACCEPTED.value, message="run accepted"
     )
     if idempotency_key is not None:
-        await repositories.create_idempotency_key(session, key=idempotency_key, run_id=run.id)
+        record = await repositories.create_idempotency_key(session, key=idempotency_key, run_id=run.id)
+        if record is None:
+            await repositories.delete_run(session, run.id)
+            winning_key = await repositories.get_idempotency_key(session, idempotency_key)
+            assert winning_key is not None, "conflicting insert implies a winning row exists"
+            return await repositories.get_run(session, winning_key.run_id), False
     metrics.runs_created_total.add(1)
     return run, True
 

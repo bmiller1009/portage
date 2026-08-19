@@ -26,19 +26,19 @@ class FakeCustomObjectsApi:
         self.raise_on_delete: Exception | None = None
         self.get_call_count = 0
 
-    def create_namespaced_custom_object(self, *, group, version, namespace, plural, body):
+    def create_namespaced_custom_object(self, *, group, version, namespace, plural, body, _request_timeout=None):
         if self.raise_on_create is not None:
             raise self.raise_on_create
         self.created = body
         return body
 
-    def get_namespaced_custom_object(self, *, group, version, namespace, plural, name):
+    def get_namespaced_custom_object(self, *, group, version, namespace, plural, name, _request_timeout=None):
         if self.raise_on_get is not None:
             raise self.raise_on_get
         self.get_call_count += 1
         return {"metadata": {"name": name}, "status": self.status_to_return}
 
-    def delete_namespaced_custom_object(self, *, group, version, namespace, plural, name):
+    def delete_namespaced_custom_object(self, *, group, version, namespace, plural, name, _request_timeout=None):
         if self.raise_on_delete is not None:
             raise self.raise_on_delete
         self.deleted_name = name
@@ -240,6 +240,31 @@ def test_submit_raises_terminal_on_other_api_status(profile, resolved_run):
     provider = KubernetesExecutionProvider(profile, api_client=fake_api)
 
     with pytest.raises(TerminalProviderError):
+        asyncio.run(provider.submit(resolved_run))
+
+
+def test_submit_raises_retryable_when_api_server_unreachable(profile, resolved_run):
+    """The API server being genuinely unreachable (DNS failure, connection
+    refused/timed out) raises urllib3.exceptions.MaxRetryError directly —
+    never an ApiException, since that class only wraps a response the
+    server actually sent (confirmed live,
+    tests/chaos/test_provider_outage_recovery.py). Must be retryable, not
+    left to fall through to the reconciler's unclassified-exception
+    fallback (which treats it as an immediate, permanent FAILED)."""
+    from typing import cast
+
+    from urllib3.connectionpool import ConnectionPool
+    from urllib3.exceptions import MaxRetryError
+
+    from control_plane.execution_provider import RetryableProviderError
+
+    fake_api = FakeCustomObjectsApi()
+    fake_api.raise_on_create = MaxRetryError(
+        pool=cast(ConnectionPool, None), url="/apis/spark.apache.org/v1/..."
+    )
+    provider = KubernetesExecutionProvider(profile, api_client=fake_api)
+
+    with pytest.raises(RetryableProviderError):
         asyncio.run(provider.submit(resolved_run))
 
 

@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal, overload
 
 from sqlalchemy import or_, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -530,6 +531,16 @@ async def get_run(session: AsyncSession, run_id: uuid.UUID) -> Run:
     return run
 
 
+async def delete_run(session: AsyncSession, run_id: uuid.UUID) -> None:
+    """Only used to clean up a run orphaned by losing an idempotency-key
+    creation race (run_service.create_run()) — never called on a run any
+    caller has actually observed. RunEvent rows cascade
+    (ondelete="CASCADE"); nothing else references a run this young."""
+    run = await get_run(session, run_id)
+    await session.delete(run)
+    await session.commit()
+
+
 async def list_runs_by_state(session: AsyncSession, states: list[str]) -> list[Run]:
     result = await session.execute(select(Run).where(Run.state.in_(states)).order_by(Run.created_at))
     return list(result.scalars().all())
@@ -657,12 +668,33 @@ async def get_idempotency_key(session: AsyncSession, key: str) -> IdempotencyKey
     return result.scalar_one_or_none()
 
 
-async def create_idempotency_key(session: AsyncSession, *, key: str, run_id: uuid.UUID) -> IdempotencyKey:
-    record = IdempotencyKey(key=key, run_id=run_id)
-    session.add(record)
+async def create_idempotency_key(session: AsyncSession, *, key: str, run_id: uuid.UUID) -> IdempotencyKey | None:
+    """Returns None (never raises) when another concurrent request already
+    claimed this key first — confirmed live
+    (tests/chaos/test_idempotent_submission.py) that two genuinely
+    concurrent POST /v1/runs calls with the same Idempotency-Key both pass
+    create_run()'s initial existence check before either commits here, so
+    this race is real, not hypothetical.
+
+    Deliberately an atomic INSERT ... ON CONFLICT DO NOTHING rather than a
+    plain insert wrapped in try/except IntegrityError: confirmed live that
+    catching the unique-violation and continuing to use the same
+    AsyncSession immediately afterward hits a genuine SQLAlchemy
+    asyncio/greenlet edge case (a spurious MissingGreenlet error on the
+    very next query on that session) — resolving the race with one
+    conflict-aware statement sidesteps that entirely, and is more correct
+    regardless, since losing this race is an expected outcome (spec §25),
+    not an exceptional one. run_service.create_run() is the caller that
+    turns a None here into a clean single-winner result."""
+    stmt = (
+        pg_insert(IdempotencyKey)
+        .values(id=uuid.uuid4(), key=key, run_id=run_id)
+        .on_conflict_do_nothing(index_elements=["key"])
+        .returning(IdempotencyKey)
+    )
+    result = await session.execute(stmt)
     await session.commit()
-    await session.refresh(record)
-    return record
+    return result.scalar_one_or_none()
 
 
 async def create_audit_event(

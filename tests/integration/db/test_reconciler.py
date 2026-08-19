@@ -17,6 +17,7 @@ from control_plane.execution_provider import (
     ProviderRun,
     ProviderStatus,
     RetryableProviderError,
+    TerminalProviderError,
     ValidationResult,
 )
 from control_plane.models import Run
@@ -503,6 +504,78 @@ async def test_poll_survives_a_transient_status_error(session, environment_name,
     await reconciler_service.reconcile_once(session)
     run = await run_service.get_run(session, run.id)
     assert run.state == RunState.RUNNING.value
+
+
+@pytest.mark.asyncio
+async def test_poll_fails_run_with_classified_message_on_terminal_provider_error(
+    session, environment_name, workload_ref, monkeypatch
+):
+    """poll_active_runs() must catch TerminalProviderError explicitly, not
+    just let it fall through to the generic "unclassified error" handler
+    — the provider deliberately classified this one (e.g. a real 401/403
+    from the platform), so the run's failure message should say so, the
+    same distinction submit_new_runs() already makes. Confirmed live as a
+    real gap (tests/chaos/test_provider_outage_recovery.py) before this
+    except clause existed."""
+
+    class TerminalOnStatusProvider:
+        def __init__(self, *, target_provider_run_id: str):
+            self._target = target_provider_run_id
+
+        async def validate(self, workload):
+            return ValidationResult(valid=True)
+
+        async def submit(self, run):
+            return ProviderRun(provider_run_id=self._target, raw={"ok": True})
+
+        async def status(self, provider_run_id):
+            if provider_run_id != self._target:
+                return ProviderStatus(state=RunState.RUNNING, provider_native_status="RUNNING")
+            raise TerminalProviderError("401 Unauthorized")
+
+        async def cancel(self, provider_run_id):
+            pass
+
+        async def logs(self, provider_run_id):
+            return LogReference(description="fake")
+
+        async def capabilities(self):
+            return CapabilitySet(
+                spark_versions=["4.2"],
+                languages=["python"],
+                dynamic_allocation=False,
+                gpu=False,
+                streaming=False,
+                local_disk=True,
+                spark_connect=False,
+            )
+
+    terminal_provider = TerminalOnStatusProvider(target_provider_run_id=f"fake-provider-run-{uuid4().hex[:8]}")
+    monkeypatch.setattr(
+        provider_factory, "build_execution_provider", lambda execution_profile: terminal_provider
+    )
+    monkeypatch.setattr(provider_factory, "build_storage_config", lambda storage_profile: {})
+    monkeypatch.setattr(provider_factory, "build_storage_volume_mounts", lambda storage_profile: None)
+
+    await _seed_dataset_bindings(session, environment_name)
+    workload_name, workload_version = workload_ref
+    run, _created = await run_service.create_run(
+        session,
+        workload_name=workload_name,
+        workload_version=workload_version,
+        environment_name=environment_name,
+    )
+
+    # First tick: submits -> QUEUED. Second tick: poll_active_runs() hits
+    # the classified TerminalProviderError -> FAILED, with the provider's
+    # own message, not "unclassified error: ...".
+    await reconciler_service.reconcile_once(session)
+    await reconciler_service.reconcile_once(session)
+    run = await run_service.get_run(session, run.id)
+    assert run.state == RunState.FAILED.value
+    events = await repositories.list_run_events(session, run.id)
+    failure_event = next(e for e in events if e.to_state == RunState.FAILED.value)
+    assert failure_event.message == "401 Unauthorized"
 
 
 @pytest.mark.asyncio

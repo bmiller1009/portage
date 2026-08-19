@@ -41,3 +41,13 @@ spec:
               port: metrics
           resources:
             {{- toYaml .Values.reconciler.resources | nindent 12 }}
+          {{- if .Values.reconciler.inClusterKubeconfig.enabled }}
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: /etc/portage
+              readOnly: true
+      volumes:
+        - name: kubeconfig
+          configMap:
+            name: {{ include "portage.fullname" . }}-reconciler-kubeconfig
+          {{- end }}

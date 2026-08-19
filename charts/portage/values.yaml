@@ -15,6 +15,18 @@ reconciler:
   metricsPort: 9091
   reconcileIntervalSeconds: 5
   resources: {}
+  # Mounts a kubeconfig at /etc/portage/kubeconfig, built from the pod's
+  # own ServiceAccount token/CA (standard in-cluster-auth-as-a-kubeconfig
+  # trick — providers/execution/kubernetes/provider.py always calls
+  # load_kube_config(), never load_incluster_config()). Only useful when
+  # a kubernetes ExecutionProfile targets the *same* cluster the
+  # reconciler runs in; register that profile with
+  # config.kubeconfig_path = "/etc/portage/kubeconfig" to use it. The
+  # ServiceAccount itself still needs RBAC granted for whatever it should
+  # be able to do in the target namespace(s) — not this chart's concern,
+  # since that grant is workload/namespace-specific.
+  inClusterKubeconfig:
+    enabled: false
 
 # spec §46: "external/HA PostgreSQL" — bring your own, not bundled by this
 # chart. existingSecretName must name a Secret (created out-of-band) with

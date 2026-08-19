@@ -276,6 +276,18 @@ async def poll_active_runs(session: AsyncSession) -> None:
                     session, run, RunState(run.state), message=f"transient poll error, retrying: {e}"
                 )
                 continue
+            except TerminalProviderError as e:
+                # Deliberately classified by the provider, not a bug or
+                # something unknown — confirmed live
+                # (tests/chaos/test_provider_outage_recovery.py) that
+                # without this clause it still ends up FAILED via the
+                # outer handler below, just mislabeled "unclassified
+                # error" for something the provider actually classified
+                # on purpose, same distinction submit_new_runs already
+                # makes.
+                metrics.provider_errors_total.add(1)
+                await run_service.transition_run_state(session, run, RunState.FAILED, message=str(e))
+                continue
 
             if status.state.value != run.state:
                 if status.state == RunState.RUNNING:
