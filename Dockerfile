@@ -6,6 +6,15 @@
 # pyproject.toml's [tool.hatch.build.targets.wheel] packages list).
 FROM python:3.12-slim
 
+# Surfaced at runtime via GET /v1/build (control_plane/version.py) — not
+# knowable from installed package metadata, so they only exist when a build
+# actually passes them; a source checkout or editable install reports
+# "unknown" for both instead of guessing.
+ARG GIT_SHA=unknown
+ARG BUILD_TIME=unknown
+ENV PORTAGE_GIT_SHA=${GIT_SHA}
+ENV PORTAGE_BUILD_TIME=${BUILD_TIME}
+
 WORKDIR /app
 
 # alembic.ini + alembic/ are needed at runtime (the migration Job runs

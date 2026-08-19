@@ -12,10 +12,31 @@ import httpx
 import typer
 from pydantic import ValidationError
 
+from control_plane import version as portage_version
 from control_plane.run_state import TERMINAL_STATES, RunState
 from spec.workload.v1alpha1 import parse_workload
 
 app = typer.Typer(name="plane", no_args_is_help=True)
+
+
+def _print_version(value: bool) -> None:
+    if value:
+        typer.echo(f"Portage {portage_version.get_version()} (portage-runtime)")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    version: bool = typer.Option(
+        False,
+        "--version",
+        callback=_print_version,
+        is_eager=True,
+        help="Show the Portage version and exit.",
+    ),
+) -> None:
+    pass
+
 workload_app = typer.Typer(no_args_is_help=True)
 app.add_typer(workload_app, name="workload")
 environment_app = typer.Typer(no_args_is_help=True)

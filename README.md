@@ -107,6 +107,14 @@ One exit criterion remains a documented, accepted gap rather than a silent one: 
 
 ## Development
 
+The project is **Portage**; the published PyPI package is **`portage-runtime`** (the name `portage` is already taken by the unrelated Gentoo Portage package manager); the CLI is **`plane`**:
+
+```
+Project:      Portage
+PyPI package: portage-runtime
+CLI:          plane
+```
+
 ```
 make dev       # stand up kind + PostgreSQL + MinIO + Spark Operator + the control plane
 make dev-down  # tear it back down

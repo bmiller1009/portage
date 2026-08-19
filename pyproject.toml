@@ -3,8 +3,13 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "portage"
-version = "0.0.1"
+# PyPI distribution name, not the project name: "portage" is already taken
+# by the unrelated Gentoo Portage package manager (confirmed on PyPI). The
+# project remains "Portage", the CLI remains `plane` — only the published
+# package name differs. See README.md's Development section for the
+# Project/PyPI-package/CLI naming distinction.
+name = "portage-runtime"
+version = "1.0.0"
 description = "Portable Spark Runtime — a control plane for running Apache Spark workloads independently of the infrastructure on which they execute."
 readme = "README.md"
 license = "Apache-2.0"

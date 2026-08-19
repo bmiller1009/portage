@@ -33,6 +33,7 @@ from api.routers import (
     workloads,
 )
 from control_plane import metrics
+from control_plane import version as portage_version
 
 app = FastAPI(title="Portage Control Plane")
 
@@ -97,6 +98,16 @@ def health() -> dict[str, str]:
 @app.get("/ready")
 def ready() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/v1/build")
+def build() -> dict[str, str]:
+    return {
+        "version": portage_version.get_version(),
+        "git_sha": portage_version.get_git_sha(),
+        "build_time": portage_version.get_build_time(),
+        "workload_spec_version": portage_version.get_workload_spec_version(),
+    }
 
 
 @app.get("/metrics", include_in_schema=False)

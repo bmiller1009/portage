@@ -1,7 +1,8 @@
 # Portable Spark Runtime — Architecture & Development Specification
 
-- **Status:** Draft v0.1
-- **Project name:** Portage (working name)
+- **Status:** GA architecture baseline
+- **Release:** Portage 1.0.0
+- **Project name:** Portage
 - **License recommendation:** Apache License 2.0
 - **Primary delivery model:** Open source, self-hosted
 - **Primary interfaces:** REST API, CLI, minimal operational UI
