@@ -6,7 +6,7 @@ Real workspace, real jobs, real output — live-verified across v0.3 (first real
 
 | Component | Version/detail, confirmed live |
 |---|---|
-| Workspace | `dbc-76d58057-ba33.cloud.databricks.com`, OAuth M2M (client ID/secret) authentication |
+| Workspace | Real Databricks workspace (hostname withheld from the public verification record — adds no verification value), OAuth M2M (client ID/secret) authentication |
 | Compute mode | Serverless (this workspace administratively forbids classic job clusters — "Only serverless compute is supported") |
 | Databricks Runtime, Spark 4.0 | 17.3 LTS, cluster-version key `17.3.x-scala2.13` |
 | Databricks Runtime, Spark 4.1 | 18.2, cluster-version key `18.2.x-scala2.13` |
@@ -33,4 +33,4 @@ status: SUCCEEDED
 SUCCEEDED: ...
 ```
 
-Output confirmed correct in the target Unity Catalog volume, and (v1.0.0) byte-identical to the same workload's Kubernetes-side output for `examples/claims_app` — the actual "same workload, same artifact, no application changes" proof spec §66 describes.
+Output confirmed correct in the target Unity Catalog volume, and semantically equivalent (Portage's formal portability guarantee, ADR 0011 — schema, row counts, null counts, partition coverage, deterministic hashes, never physical file identity) to the same workload's Kubernetes-side output for `examples/claims_app` — the actual "same workload, same artifact, no application changes" proof spec §66 describes. In this specific v1.0.0 run the output also happened to be byte-identical across both providers, an observed bonus, not something the contract itself requires.

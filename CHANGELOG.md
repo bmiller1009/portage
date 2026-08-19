@@ -49,9 +49,10 @@ infrastructure, not simulated.
   `plane conformance test` (dynamic, run-based) and
   `plane conformance report` (static, provider-certification-style).
 - `examples/claims_app`: a genuine two-input join workload, the actual
-  hero-demo proof — same workload file, same artifact reference, byte-
-  identical output on both a real Kubernetes environment and a real
-  Databricks Serverless environment.
+  hero-demo proof — same workload file, same artifact reference,
+  semantically equivalent output (the guarantee above) on both a real
+  Kubernetes environment and a real Databricks Serverless environment;
+  this run's output also happened to be byte-identical.
 
 ### HA / reconciliation
 

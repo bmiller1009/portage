@@ -18,8 +18,8 @@ name: Live Provider Verification
 # -> New repository secret) — this workflow does nothing useful until
 # these exist:
 #   PORTAGE_DEV_BOX_SSH_KEY       private key for SSH access to the box
-#   PORTAGE_DEV_BOX_HOST          e.g. 172.16.2.241 (or a hostname)
-#   PORTAGE_DEV_BOX_USER          e.g. brza
+#   PORTAGE_DEV_BOX_HOST          the box's IP or hostname
+#   PORTAGE_DEV_BOX_USER          the SSH user on that box
 #   PORTAGE_DEV_BOX_HOST_KEY      output of `ssh-keyscan <host>`, pinned
 #                                 ahead of time rather than trust-on-first-
 #                                 use from a CI runner
