@@ -24,6 +24,8 @@ dataset_app = typer.Typer(no_args_is_help=True)
 app.add_typer(dataset_app, name="dataset")
 conformance_app = typer.Typer(no_args_is_help=True)
 app.add_typer(conformance_app, name="conformance")
+webhook_app = typer.Typer(no_args_is_help=True)
+app.add_typer(webhook_app, name="webhook")
 
 
 def _api_base_url() -> str:
@@ -53,6 +55,38 @@ def dataset_list(dataset_name: str = typer.Option(None, "--dataset")) -> None:
         typer.echo(
             f"{binding['dataset_name']}\t{binding['environment_name']}\t{binding['kind']}\t{binding['uri']}"
         )
+
+
+@webhook_app.command("create")
+def webhook_create(
+    url: str,
+    secret: str = typer.Option(..., "--secret"),
+    event_types: list[str] = typer.Option(..., "--event-type"),
+) -> None:
+    """Register a webhook (spec §39/§69). Pass --event-type one or more
+    times, e.g. --event-type run.succeeded --event-type run.failed, or
+    --event-type run.state_changed to match every transition."""
+    resp = httpx.post(
+        f"{_api_base_url()}/v1/webhooks",
+        json={"url": url, "event_types": event_types, "secret": secret},
+    )
+    resp.raise_for_status()
+    typer.echo(f"created: {resp.json()['id']}")
+
+
+@webhook_app.command("list")
+def webhook_list() -> None:
+    resp = httpx.get(f"{_api_base_url()}/v1/webhooks")
+    resp.raise_for_status()
+    for sub in resp.json():
+        typer.echo(f"{sub['id']}\t{sub['url']}\t{','.join(sub['event_types'])}\t{sub['enabled']}")
+
+
+@webhook_app.command("delete")
+def webhook_delete(subscription_id: str) -> None:
+    resp = httpx.delete(f"{_api_base_url()}/v1/webhooks/{subscription_id}")
+    resp.raise_for_status()
+    typer.echo(f"deleted: {subscription_id}")
 
 
 @workload_app.command("validate")

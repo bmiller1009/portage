@@ -2,7 +2,9 @@
 §27): config/definition CRUD (Environment/ExecutionProfile/StorageProfile/
 DatasetBinding/WorkloadDefinition) plus run lifecycle persistence
 (Run/ProviderRun/RunEvent/IdempotencyKey) plus the identity-bearing
-privileged-action audit trail (AuditEvent, spec §36).
+privileged-action audit trail (AuditEvent, spec §36) plus outbound webhook
+subscriptions and their delivery log (WebhookSubscription/WebhookDelivery,
+spec §39).
 """
 
 import uuid
@@ -181,6 +183,47 @@ class IdempotencyKey(Base):
     key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WebhookSubscription(Base):
+    """A registered outbound webhook (spec §39 — "very small primitives...
+    webhooks/events", deliberately not a general event-bus). event_types
+    holds a list of run-lifecycle event names (e.g. "run.succeeded",
+    "run.failed") or the single wildcard "run.state_changed"."""
+
+    __tablename__ = "webhook_subscriptions"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    url: Mapped[str] = mapped_column(String(2048))
+    event_types: Mapped[list] = mapped_column(JSON)
+    # Used to HMAC-sign delivery payloads (X-Portage-Signature) — never
+    # logged or returned by the API after creation.
+    secret: Mapped[str] = mapped_column(String(255))
+    enabled: Mapped[bool] = mapped_column(default=True, server_default="true")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class WebhookDelivery(Base):
+    """One row per (subscription, run-event) match — persisted the same
+    way AuditEvent persists outcomes, so a delivery's fate (delivered,
+    still pending, or failed past the retry limit) is always inspectable
+    rather than a fire-and-forget black box."""
+
+    __tablename__ = "webhook_deliveries"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("webhook_subscriptions.id", ondelete="CASCADE"), index=True
+    )
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"), index=True)
+    event_type: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict] = mapped_column(JSON)
+    # "pending" | "delivered" | "failed" (spec §26/§67's own
+    # retry-classification discipline, applied here too).
+    status: Mapped[str] = mapped_column(String(32), default="pending", server_default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 class AuditEvent(Base):

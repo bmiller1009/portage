@@ -29,6 +29,7 @@ from api.routers import (
     runs,
     storage_profiles,
     validate,
+    webhooks,
     workloads,
 )
 from control_plane import metrics
@@ -56,6 +57,7 @@ app.include_router(validate.router)
 app.include_router(audit.router)
 app.include_router(providers.router)
 app.include_router(conformance.router)
+app.include_router(webhooks.router)
 
 
 def _route_path(request: Request) -> str:

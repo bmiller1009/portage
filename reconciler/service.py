@@ -8,11 +8,13 @@ rather than crashing the loop — control-plane resilience (ADR 0007) applies
 to the reconciler itself, not just to the API staying up during an outage.
 """
 
+import json
 from datetime import UTC, datetime
 
+import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from control_plane import metrics, provider_factory, repositories, run_service
+from control_plane import metrics, provider_factory, repositories, run_service, webhooks
 from control_plane.execution_provider import (
     ResolvedWorkload,
     RetryableProviderError,
@@ -318,7 +320,43 @@ async def cancel_runs(session: AsyncSession) -> None:
             )
 
 
+MAX_WEBHOOK_DELIVERY_ATTEMPTS = 5
+
+
+async def deliver_webhooks(session: AsyncSession) -> None:
+    """Sends every pending WebhookDelivery (spec §39/§69) — the only tick
+    function here that does outbound HTTP to a caller-controlled URL, so
+    a slow or dead endpoint must never block or fail anything else in
+    this loop. Each delivery is independent: one failing never affects
+    another, and a delivery that keeps failing is marked "failed" past
+    MAX_WEBHOOK_DELIVERY_ATTEMPTS rather than retried forever."""
+    for delivery in await repositories.list_pending_webhook_deliveries(session):
+        subscription = await repositories.get_webhook_subscription(session, delivery.subscription_id)
+        if subscription is None or not subscription.enabled:
+            await repositories.mark_webhook_delivery(session, delivery, status="failed", attempts=delivery.attempts)
+            continue
+
+        body = json.dumps(delivery.payload).encode()
+        signature = webhooks.sign_payload(body, subscription.secret)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(
+                    subscription.url,
+                    content=body,
+                    headers={"Content-Type": "application/json", "X-Portage-Signature": signature},
+                )
+            response.raise_for_status()
+            await repositories.mark_webhook_delivery(
+                session, delivery, status="delivered", attempts=delivery.attempts + 1
+            )
+        except httpx.HTTPError:
+            attempts = delivery.attempts + 1
+            status = "failed" if attempts >= MAX_WEBHOOK_DELIVERY_ATTEMPTS else "pending"
+            await repositories.mark_webhook_delivery(session, delivery, status=status, attempts=attempts)
+
+
 async def reconcile_once(session: AsyncSession) -> None:
     await submit_new_runs(session)
     await poll_active_runs(session)
     await cancel_runs(session)
+    await deliver_webhooks(session)

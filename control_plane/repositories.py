@@ -22,6 +22,8 @@ from control_plane.models import (
     Run,
     RunEvent,
     StorageProfile,
+    WebhookDelivery,
+    WebhookSubscription,
     WorkloadDefinition,
 )
 from control_plane.run_state import RunState
@@ -587,3 +589,67 @@ async def list_audit_events(
         query = query.where(AuditEvent.created_at <= until)
     result = await session.execute(query.order_by(AuditEvent.created_at.desc()).limit(limit))
     return list(result.scalars().all())
+
+
+# --- Webhooks (spec §39/§69) -------------------------------------------
+
+
+async def create_webhook_subscription(
+    session: AsyncSession, *, url: str, event_types: list[str], secret: str, enabled: bool = True
+) -> WebhookSubscription:
+    subscription = WebhookSubscription(url=url, event_types=event_types, secret=secret, enabled=enabled)
+    session.add(subscription)
+    await session.commit()
+    await session.refresh(subscription)
+    return subscription
+
+
+async def list_webhook_subscriptions(session: AsyncSession, *, enabled_only: bool = False) -> list[WebhookSubscription]:
+    query = select(WebhookSubscription)
+    if enabled_only:
+        query = query.where(WebhookSubscription.enabled.is_(True))
+    result = await session.execute(query.order_by(WebhookSubscription.created_at))
+    return list(result.scalars().all())
+
+
+async def get_webhook_subscription(session: AsyncSession, subscription_id: uuid.UUID) -> WebhookSubscription | None:
+    result = await session.execute(
+        select(WebhookSubscription).where(WebhookSubscription.id == subscription_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def delete_webhook_subscription(session: AsyncSession, subscription_id: uuid.UUID) -> None:
+    subscription = await get_webhook_subscription(session, subscription_id)
+    if subscription is None:
+        raise NotFoundError(f"webhook subscription '{subscription_id}' not found")
+    await session.delete(subscription)
+    await session.commit()
+
+
+async def create_webhook_delivery(
+    session: AsyncSession, *, subscription_id: uuid.UUID, run_id: uuid.UUID, event_type: str, payload: dict
+) -> WebhookDelivery:
+    delivery = WebhookDelivery(
+        subscription_id=subscription_id, run_id=run_id, event_type=event_type, payload=payload
+    )
+    session.add(delivery)
+    await session.commit()
+    await session.refresh(delivery)
+    return delivery
+
+
+async def list_pending_webhook_deliveries(session: AsyncSession) -> list[WebhookDelivery]:
+    result = await session.execute(
+        select(WebhookDelivery).where(WebhookDelivery.status == "pending").order_by(WebhookDelivery.created_at)
+    )
+    return list(result.scalars().all())
+
+
+async def mark_webhook_delivery(
+    session: AsyncSession, delivery: WebhookDelivery, *, status: str, attempts: int
+) -> None:
+    delivery.status = status
+    delivery.attempts = attempts
+    delivery.last_attempted_at = datetime.now(UTC)
+    await session.commit()

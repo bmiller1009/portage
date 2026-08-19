@@ -41,6 +41,10 @@ def _mock_transition(monkeypatch):
 
     monkeypatch.setattr(repositories, "update_run_state", AsyncMock(side_effect=_update_state))
     monkeypatch.setattr(repositories, "create_run_event", AsyncMock())
+    # transition_run_state() also dispatches webhook deliveries -- no
+    # subscriptions exist in these tests, so an empty list is enough to
+    # keep record_webhook_deliveries() a no-op.
+    monkeypatch.setattr(repositories, "list_webhook_subscriptions", AsyncMock(return_value=[]))
 
 
 @pytest.mark.asyncio

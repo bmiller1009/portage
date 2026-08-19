@@ -208,3 +208,25 @@ class CertificationReportOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     rows: list[CertificationRowOut]
+
+
+class WebhookSubscriptionCreate(BaseModel):
+    url: str
+    event_types: list[str]
+    secret: str
+    enabled: bool = True
+
+
+class WebhookSubscriptionOut(BaseModel):
+    """secret is deliberately excluded — returned only once, implicitly,
+    at creation via the request the caller itself sent; never echoed
+    back by a GET, same discipline as credential_reference values never
+    round-tripping a raw secret (spec §35)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    url: str
+    event_types: list[str]
+    enabled: bool
+    created_at: datetime
