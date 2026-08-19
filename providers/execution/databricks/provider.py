@@ -1,9 +1,47 @@
 """Databricks execution provider (docs/architecture/spec.md §16, ADR 0004).
 
-Translation-layer prototype only — no live Databricks workspace was
-available during Phase 0, so this is tested against a fake WorkspaceClient
-(see tests/unit/test_databricks_provider.py), never a real one. Live
-submission is future work once workspace credentials exist.
+Real Databricks submission, not a translation-layer prototype — live-run
+against a real workspace since v0.3 (OAuth M2M authentication, a real
+`WorkspaceClient`), most recently re-confirmed in the v1.0.0
+release-hardening pass with Databricks Runtime 19/Spark 4.2 support (see
+`providers/execution/databricks/compatibility.py` and
+`docs/providers/databricks.md` for exact live-run results). Unit tests
+(`tests/unit/test_databricks_provider.py`) exercise this module against a
+fake `WorkspaceClient` for speed/no-credentials-needed CI runs; that's a
+test-isolation choice, not a statement about whether real submission
+exists.
+
+Serverless compute (`DatabricksProfile.serverless`) is the only mode
+live-verified against a real workspace to date — this project's own
+verification workspace administratively forbids classic job clusters
+("Only serverless compute is supported"). The classic-cluster
+(`new_cluster`) submission path is implemented and covered by the
+provider-contract test suite, but has never been live-run; see the module
+docstring on `DatabricksProfile` and `docs/verification/v1.0.0.md` for the
+exact, current verification status of each path.
+
+Spark<->Databricks Runtime compatibility resolution lives in
+`compatibility.py`, not inline here — a curated table refreshed against
+real release notes / a live workspace's `w.clusters.spark_versions()` as
+new runtimes ship, with an optional bounded runtime cross-check
+(`cross_check_against_workspace()`) and an explicit-override escape hatch
+on `DatabricksProfile` for a workspace running ahead of the curated table.
+
+`submit()` passes the run's own `run_id` as the Jobs API's
+`idempotency_token`, so a submit retried after a transient failure doesn't
+create a duplicate remote job run — the reconciler's own retry/reconcile
+loop (`reconciler/service.py`) is what actually drives retries; this
+provider only classifies failures as `RetryableProviderError` vs
+`TerminalProviderError` and lets the reconciler decide what to do next.
+
+Known limitations: Serverless's Spark Connect session rejects
+`spark.conf.get()` for non-Spark-builtin keys, and the Jobs API's own
+`environment_variables_key` doesn't reach a serverless Python-wheel task's
+process environment either — portable dataset/storage config is routed
+through `PythonWheelTask.parameters`/`sys.argv` instead (see
+`examples/wordcount_app`'s `_portable_config()`). `jvm-jar` workloads are
+rejected outright under `serverless=True` (`spark_jar_task` isn't a
+serverless-eligible task type).
 
 Translates a resolved workload into a Jobs API 2.2 one-time-run submission
 (`jobs.submit`) using a python_wheel_task or spark_jar_task depending on
@@ -498,8 +536,6 @@ class DatabricksExecutionProvider:
             local_disk=True,
             spark_connect=False,
             # Real live runs since v0.3 (OAuth M2M against a real
-            # workspace) — not a translation-layer prototype today, even
-            # though this module's own header docstring predates that and
-            # hasn't caught up (tracked separately, doc-audit scope).
+            # workspace) — see this module's header docstring.
             verification="live_verified",
         )
