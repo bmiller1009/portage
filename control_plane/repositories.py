@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal, overload
 
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control_plane.models import (
@@ -35,6 +36,23 @@ class AlreadyExistsError(Exception):
 
 class NotFoundError(Exception):
     pass
+
+
+class InUseError(Exception):
+    """Raised when a delete is rejected by one of the DB's own foreign-key
+    constraints (every FK in control_plane/models.py that protects a
+    still-referenced row is already declared ondelete="RESTRICT", or
+    defaults to the equivalent NO ACTION behavior) — translates a raw
+    IntegrityError into a clear, resource-aware message instead."""
+
+
+async def _delete_or_raise_in_use(session: AsyncSession, obj, *, in_use_message: str) -> None:
+    await session.delete(obj)
+    try:
+        await session.commit()
+    except IntegrityError as e:
+        await session.rollback()
+        raise InUseError(in_use_message) from e
 
 
 # --- ExecutionProfile ---------------------------------------------------
@@ -73,6 +91,24 @@ async def get_execution_profile(
 async def list_execution_profiles(session: AsyncSession) -> list[ExecutionProfile]:
     result = await session.execute(select(ExecutionProfile).order_by(ExecutionProfile.name))
     return list(result.scalars().all())
+
+
+async def update_execution_profile(
+    session: AsyncSession, name: str, *, provider: str, config: dict
+) -> ExecutionProfile:
+    profile = await get_execution_profile(session, name)
+    profile.provider = provider
+    profile.config = config
+    await session.commit()
+    await session.refresh(profile)
+    return profile
+
+
+async def delete_execution_profile(session: AsyncSession, name: str) -> None:
+    profile = await get_execution_profile(session, name)
+    await _delete_or_raise_in_use(
+        session, profile, in_use_message=f"execution profile '{name}' is still referenced by an environment"
+    )
 
 
 # --- StorageProfile ------------------------------------------------------
@@ -118,6 +154,25 @@ async def get_storage_profile(
 async def list_storage_profiles(session: AsyncSession) -> list[StorageProfile]:
     result = await session.execute(select(StorageProfile).order_by(StorageProfile.name))
     return list(result.scalars().all())
+
+
+async def update_storage_profile(
+    session: AsyncSession, name: str, *, provider: str, config: dict, credential_reference: dict
+) -> StorageProfile:
+    profile = await get_storage_profile(session, name)
+    profile.provider = provider
+    profile.config = config
+    profile.credential_reference = credential_reference
+    await session.commit()
+    await session.refresh(profile)
+    return profile
+
+
+async def delete_storage_profile(session: AsyncSession, name: str) -> None:
+    profile = await get_storage_profile(session, name)
+    await _delete_or_raise_in_use(
+        session, profile, in_use_message=f"storage profile '{name}' is still referenced by an environment"
+    )
 
 
 # --- Environment -----------------------------------------------------------
@@ -172,6 +227,37 @@ async def get_environment(
 async def list_environments(session: AsyncSession) -> list[Environment]:
     result = await session.execute(select(Environment).order_by(Environment.name))
     return list(result.scalars().all())
+
+
+async def update_environment(
+    session: AsyncSession,
+    name: str,
+    *,
+    execution_provider: str,
+    execution_profile_name: str,
+    storage_provider: str,
+    storage_profile_name: str,
+) -> Environment:
+    environment = await get_environment(session, name)
+    # Same referential-integrity check create_environment() already does
+    # — a dangling profile reference should be a clear error here too,
+    # not a raw IntegrityError.
+    await get_execution_profile(session, execution_profile_name)
+    await get_storage_profile(session, storage_profile_name)
+    environment.execution_provider = execution_provider
+    environment.execution_profile_name = execution_profile_name
+    environment.storage_provider = storage_provider
+    environment.storage_profile_name = storage_profile_name
+    await session.commit()
+    await session.refresh(environment)
+    return environment
+
+
+async def delete_environment(session: AsyncSession, name: str) -> None:
+    environment = await get_environment(session, name)
+    await _delete_or_raise_in_use(
+        session, environment, in_use_message=f"environment '{name}' is still referenced by a run"
+    )
 
 
 # --- DatasetBinding --------------------------------------------------------
@@ -233,6 +319,23 @@ async def list_dataset_bindings(
         query = query.where(DatasetBinding.dataset_name == dataset_name)
     result = await session.execute(query.order_by(DatasetBinding.dataset_name, DatasetBinding.environment_name))
     return list(result.scalars().all())
+
+
+async def update_dataset_binding(
+    session: AsyncSession, dataset_name: str, environment_name: str, *, kind: str, uri: str
+) -> DatasetBinding:
+    binding = await get_dataset_binding(session, dataset_name, environment_name)
+    binding.kind = kind
+    binding.uri = uri
+    await session.commit()
+    await session.refresh(binding)
+    return binding
+
+
+async def delete_dataset_binding(session: AsyncSession, dataset_name: str, environment_name: str) -> None:
+    binding = await get_dataset_binding(session, dataset_name, environment_name)
+    await session.delete(binding)
+    await session.commit()
 
 
 # --- ArtifactBinding ---------------------------------------------------
@@ -380,6 +483,25 @@ async def list_workload_definitions(session: AsyncSession) -> list[WorkloadDefin
         select(WorkloadDefinition).order_by(WorkloadDefinition.name, WorkloadDefinition.version)
     )
     return list(result.scalars().all())
+
+
+async def update_workload_definition(
+    session: AsyncSession, name: str, version: str, *, definition: dict
+) -> WorkloadDefinition:
+    workload = await get_workload_definition(session, name, version=version)
+    workload.definition = definition
+    await session.commit()
+    await session.refresh(workload)
+    return workload
+
+
+async def delete_workload_definition(session: AsyncSession, name: str, version: str) -> None:
+    workload = await get_workload_definition(session, name, version=version)
+    await _delete_or_raise_in_use(
+        session,
+        workload,
+        in_use_message=f"workload '{name}' version '{version}' is still referenced by a run",
+    )
 
 
 # --- Run lifecycle (spec §23-25) -------------------------------------------

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import ROLE_OPERATOR, ROLE_VIEWER, Identity, require_role
-from api.schemas import ExecutionProfileCreate, ExecutionProfileOut
+from api.schemas import ExecutionProfileCreate, ExecutionProfileOut, ExecutionProfileUpdate
 from control_plane import audit, repositories
 from control_plane.db import get_db_session
 
@@ -64,3 +64,54 @@ async def get_execution_profile(
         return await repositories.get_execution_profile(session, name)
     except repositories.NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.put("/{name}", response_model=ExecutionProfileOut)
+async def update_execution_profile(
+    name: str,
+    body: ExecutionProfileUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_OPERATOR)),
+):
+    try:
+        profile = await repositories.update_execution_profile(
+            session, name, provider=body.provider, config=body.config
+        )
+    except repositories.NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    await audit.record_audit_event(
+        session,
+        identity=identity.email or identity.subject,
+        action="EXECUTION_PROFILE_UPDATE",
+        resource=name,
+        environment_name=None,
+        result=audit.RESULT_SUCCESS,
+        source=identity.source,
+    )
+    await session.refresh(profile)
+    return profile
+
+
+@router.delete("/{name}", status_code=204)
+async def delete_execution_profile(
+    name: str,
+    session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_OPERATOR)),
+):
+    try:
+        await repositories.delete_execution_profile(session, name)
+    except repositories.NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except repositories.InUseError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+    await audit.record_audit_event(
+        session,
+        identity=identity.email or identity.subject,
+        action="EXECUTION_PROFILE_DELETE",
+        resource=name,
+        environment_name=None,
+        result=audit.RESULT_SUCCESS,
+        source=identity.source,
+    )

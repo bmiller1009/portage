@@ -73,3 +73,61 @@ async def get_workload(
         return await repositories.get_workload_definition(session, name, version=version)
     except repositories.NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.put("/{name}", response_model=WorkloadDefinitionOut)
+async def update_workload(
+    name: str,
+    version: str,
+    body: SparkWorkload,
+    session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_DEVELOPER)),
+):
+    """version is a required query param (unlike GET, which defaults to
+    latest) — defaulting a destructive-ish full replace to "whichever is
+    latest" would be a surprising, dangerous default."""
+    resource = f"{name}/{version}"
+    try:
+        workload = await repositories.update_workload_definition(
+            session, name, version, definition=body.model_dump()
+        )
+    except repositories.NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    await audit.record_audit_event(
+        session,
+        identity=identity.email or identity.subject,
+        action="WORKLOAD_UPDATE",
+        resource=resource,
+        environment_name=None,
+        result=audit.RESULT_SUCCESS,
+        source=identity.source,
+    )
+    await session.refresh(workload)
+    return workload
+
+
+@router.delete("/{name}", status_code=204)
+async def delete_workload(
+    name: str,
+    version: str,
+    session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_DEVELOPER)),
+):
+    resource = f"{name}/{version}"
+    try:
+        await repositories.delete_workload_definition(session, name, version)
+    except repositories.NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except repositories.InUseError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+    await audit.record_audit_event(
+        session,
+        identity=identity.email or identity.subject,
+        action="WORKLOAD_DELETE",
+        resource=resource,
+        environment_name=None,
+        result=audit.RESULT_SUCCESS,
+        source=identity.source,
+    )

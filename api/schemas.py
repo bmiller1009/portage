@@ -27,6 +27,16 @@ class ExecutionProfileOut(BaseModel):
     config: dict
 
 
+class ExecutionProfileUpdate(BaseModel):
+    """Same fields as Create minus `name` (identifies the resource via the
+    URL path, per REST PUT convention) — a full replace, not a partial
+    patch, matching how Terraform's own update model sends whole desired
+    state on every apply."""
+
+    provider: str
+    config: dict
+
+
 class StorageProfileCreate(BaseModel):
     name: str
     provider: str
@@ -38,6 +48,12 @@ class StorageProfileOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     name: str
+    provider: str
+    config: dict
+    credential_reference: dict
+
+
+class StorageProfileUpdate(BaseModel):
     provider: str
     config: dict
     credential_reference: dict
@@ -61,6 +77,13 @@ class EnvironmentOut(BaseModel):
     storage_profile_name: str
 
 
+class EnvironmentUpdate(BaseModel):
+    execution_provider: str
+    execution_profile_name: str
+    storage_provider: str
+    storage_profile_name: str
+
+
 class DatasetBindingCreate(BaseModel):
     dataset_name: str
     environment_name: str
@@ -73,6 +96,11 @@ class DatasetBindingOut(BaseModel):
 
     dataset_name: str
     environment_name: str
+    kind: str
+    uri: str
+
+
+class DatasetBindingUpdate(BaseModel):
     kind: str
     uri: str
 

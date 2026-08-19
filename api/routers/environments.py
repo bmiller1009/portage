@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import ROLE_OPERATOR, ROLE_VIEWER, Identity, require_role
-from api.schemas import EnvironmentCreate, EnvironmentOut
+from api.schemas import EnvironmentCreate, EnvironmentOut, EnvironmentUpdate
 from control_plane import audit, repositories
 from control_plane.db import get_db_session
 
@@ -80,3 +80,62 @@ async def get_environment(
         return await repositories.get_environment(session, name)
     except repositories.NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.put("/{name}", response_model=EnvironmentOut)
+async def update_environment(
+    name: str,
+    body: EnvironmentUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_OPERATOR)),
+):
+    """A NotFoundError here means either the environment itself or one of
+    its referenced profiles doesn't exist — both surface as 404, same as
+    every other resource's update in this file."""
+    try:
+        environment = await repositories.update_environment(
+            session,
+            name,
+            execution_provider=body.execution_provider,
+            execution_profile_name=body.execution_profile_name,
+            storage_provider=body.storage_provider,
+            storage_profile_name=body.storage_profile_name,
+        )
+    except repositories.NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+    await audit.record_audit_event(
+        session,
+        identity=identity.email or identity.subject,
+        action="ENVIRONMENT_UPDATE",
+        resource=name,
+        environment_name=name,
+        result=audit.RESULT_SUCCESS,
+        source=identity.source,
+    )
+    await session.refresh(environment)
+    return environment
+
+
+@router.delete("/{name}", status_code=204)
+async def delete_environment(
+    name: str,
+    session: AsyncSession = Depends(get_db_session),
+    identity: Identity = Depends(require_role(ROLE_OPERATOR)),
+):
+    try:
+        await repositories.delete_environment(session, name)
+    except repositories.NotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except repositories.InUseError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+    await audit.record_audit_event(
+        session,
+        identity=identity.email or identity.subject,
+        action="ENVIRONMENT_DELETE",
+        resource=name,
+        environment_name=name,
+        result=audit.RESULT_SUCCESS,
+        source=identity.source,
+    )
