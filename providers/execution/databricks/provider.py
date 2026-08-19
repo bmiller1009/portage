@@ -71,15 +71,18 @@ _SUPPORTED_SPARK_VERSIONS = {"4.0", "4.1"}
 # Databricks Runtime ships Spark 4.2 yet, so it's deliberately excluded
 # from _SUPPORTED_SPARK_VERSIONS above — claiming support for it would
 # make validate() return a false PASS for a workload that cannot actually
-# run on any Databricks cluster today. The exact Jobs API `spark_version`
-# cluster identifier string (e.g. "17.3.x-scala2.13"-shaped) is only
-# available from a live workspace via w.clusters.spark_versions() — these
-# are best-effort values from public docs, to be confirmed against a real
-# workspace before any live submission is attempted.
+# run on any Databricks cluster today. Confirmed live (v0.3) against a
+# real workspace's w.clusters.spark_versions() — these are the exact
+# non-ML/non-Photon/non-GPU scala2.13 keys.
 _SPARK_TO_DBR_CLUSTER_VERSION = {
-    "4.1": "PLACEHOLDER-runtime-18.x-confirm-via-clusters.spark_versions",
-    "4.0": "PLACEHOLDER-runtime-17.3-lts-confirm-via-clusters.spark_versions",
+    "4.1": "18.2.x-scala2.13",
+    "4.0": "17.3.x-scala2.13",
 }
+
+# Confirmed live (v0.3): environment_version "2" does not support wheel
+# dependency loading for serverless Python-wheel tasks; "4" does.
+_SERVERLESS_ENVIRONMENT_KEY = "portage-serverless"
+_SERVERLESS_ENVIRONMENT_VERSION = "4"
 
 # Native Databricks RunLifeCycleState / RunResultState -> canonical RunState
 # (spec §23), verified against databricks.sdk.service.jobs.RunLifeCycleState
@@ -114,7 +117,12 @@ class JobsAPILike(Protocol):
     the real SDK client."""
 
     def submit(
-        self, *, run_name: str, tasks: list[dbx_jobs.SubmitTask], idempotency_token: str | None = None
+        self,
+        *,
+        run_name: str,
+        tasks: list[dbx_jobs.SubmitTask],
+        environments: list[dbx_jobs.JobEnvironment] | None = None,
+        idempotency_token: str | None = None,
     ) -> Any: ...
     def get_run(self, *, run_id: int) -> Any: ...
     def cancel_run(self, *, run_id: int) -> Any: ...
@@ -129,6 +137,15 @@ class DatabricksProfile:
     host: str
     cluster_node_type_id: str
     num_workers: int = 1
+    # Confirmed live (v0.3): some workspaces administratively forbid
+    # classic job clusters ("Only serverless compute is supported in the
+    # workspace") -- jobs.submit() then must omit new_cluster entirely
+    # and reference a serverless JobEnvironment instead (see
+    # build_run_submission()/build_job_environments() below). Opt-in,
+    # defaulting False, so every workspace that *does* allow classic
+    # clusters (the common case, and what every existing test assumes)
+    # is unaffected.
+    serverless: bool = False
     # Runtime profile name -> provider-specific hint dict (spec §18),
     # environment-scoped rather than a global registry — e.g.
     # {"high-memory": {"node_type_id": "r5.4xlarge"}}.
@@ -181,7 +198,33 @@ class DatabricksExecutionProvider:
 
     def build_run_submission(self, run: RunRequest) -> dbx_jobs.SubmitTask:
         """Pure translation function — resolved workload -> Jobs API 2.2
-        one-time-run submission payload. No I/O, directly unit-testable."""
+        one-time-run submission payload. No I/O, directly unit-testable.
+
+        **Confirmed live (v0.3)**: when `self.profile.serverless` is set,
+        the returned task has no `new_cluster` to attach `spark_conf` to,
+        and Databricks Serverless compute has no per-task or
+        per-environment equivalent (confirmed against the SDK's own
+        `PythonWheelTask`/`compute.Environment` dataclasses — neither
+        exposes a spark_conf-shaped field). Worse: even a *classic*
+        cluster's `spark_conf` wouldn't help here, because Serverless's
+        `SparkSession.builder.getOrCreate()` is backed by Spark Connect,
+        and Spark Connect's own config-read RPC rejects any non-Spark-
+        builtin key outright ([CONFIG_NOT_AVAILABLE.WITHOUT_SUGGESTION]),
+        independent of how it was set. The Jobs API's own
+        `environment_variables_key` (SubmitTask -> JobEnvironmentVariables)
+        looked like the fix but confirmed live *not* to actually reach a
+        serverless python_wheel_task's process environment (tested via a
+        raw SDK submission with no Portage code involved at all). What
+        does work, confirmed live end-to-end: `PythonWheelTask.parameters`
+        as plain `--<key>=<value>` strings, surfaced as ordinary
+        `sys.argv` entries ahead of the wheel's console_scripts entry
+        point. So `run.resolved.storage_config`/`dataset_config` (ADR
+        0006's `spark.portable.dataset.*.uri` contract every provider
+        otherwise relies on) are appended to `parameters` that way for
+        serverless specifically — `examples/wordcount_app`'s own job code
+        (`_portable_config()`) already falls back to parsing them from
+        `sys.argv` when `spark.conf.get()` is rejected, so this needs no
+        per-application special-casing beyond that one shared helper."""
         workload = run.resolved.workload
         cluster_spark_version = _SPARK_TO_DBR_CLUSTER_VERSION.get(
             workload.runtime.spark, workload.runtime.spark
@@ -200,6 +243,14 @@ class DatabricksExecutionProvider:
                 "Databricks provider does not yet support spark-declarative-pipeline workloads"
             )
         if workload.application.type == "jvm-jar":
+            if self.profile.serverless:
+                # Confirmed against Databricks' own Jobs API docs: Serverless
+                # compute supports notebook/Python-wheel/Python-script/dbt
+                # task types, not spark_jar_task -- a real cluster is the
+                # only way to run a JVM main class today.
+                raise TerminalProviderError(
+                    "Databricks serverless compute does not support jvm-jar (spark_jar_task) workloads"
+                )
             task_kwargs = {
                 "spark_jar_task": dbx_jobs.SparkJarTask(
                     main_class_name=workload.application.entryPoint,
@@ -213,14 +264,37 @@ class DatabricksExecutionProvider:
             # spark-declarative-pipeline, already handled above.
             assert workload.application.entryPoint is not None
             package_name, entry_point_name = _split_entry_point(workload.application.entryPoint)
-            task_kwargs = {
-                "python_wheel_task": dbx_jobs.PythonWheelTask(
-                    package_name=package_name,
-                    entry_point=entry_point_name,
-                    parameters=list(workload.arguments),
-                ),
-                "libraries": [dbx_compute.Library(whl=workload.application.artifact)],
-            }
+            if self.profile.serverless:
+                # Serverless resolves dependencies from the task's
+                # environment_key (see build_job_environments()), not a
+                # `libraries` list on the task itself -- confirmed live,
+                # `libraries` is simply ignored there. spark_conf reaches
+                # the job as extra --key=value parameters (see this
+                # method's own docstring for why, and _portable_config()
+                # in examples/wordcount_app for the matching read side).
+                task_kwargs = {
+                    "python_wheel_task": dbx_jobs.PythonWheelTask(
+                        package_name=package_name,
+                        entry_point=entry_point_name,
+                        parameters=[
+                            *workload.arguments,
+                            *(f"--{k}={v}" for k, v in spark_conf.items()),
+                        ],
+                    ),
+                    "environment_key": _SERVERLESS_ENVIRONMENT_KEY,
+                }
+            else:
+                task_kwargs = {
+                    "python_wheel_task": dbx_jobs.PythonWheelTask(
+                        package_name=package_name,
+                        entry_point=entry_point_name,
+                        parameters=list(workload.arguments),
+                    ),
+                    "libraries": [dbx_compute.Library(whl=workload.application.artifact)],
+                }
+
+        if self.profile.serverless:
+            return dbx_jobs.SubmitTask(task_key="main", **task_kwargs)
 
         node_type_id = self.profile.cluster_node_type_id
         if workload.runtime.profile:
@@ -242,12 +316,40 @@ class DatabricksExecutionProvider:
             **task_kwargs,
         )
 
+    def build_job_environments(self, run: RunRequest) -> list[dbx_jobs.JobEnvironment]:
+        """Pure translation function, paired with build_run_submission()'s
+        `environment_key` -- serverless Python-wheel tasks resolve their
+        wheel dependency from this job-level `environments` list rather
+        than the task's own `libraries` (see build_run_submission()'s
+        docstring for the confirmed-live spark_conf gap this doesn't
+        solve). Empty for non-serverless profiles and non-python-wheel
+        types, since jobs.submit(environments=[]) is a harmless no-op."""
+        if not self.profile.serverless:
+            return []
+        workload = run.resolved.workload
+        if workload.application.type != "python-wheel":
+            return []
+        # ApplicationSpec's validator guarantees artifact is set for
+        # python-wheel.
+        assert workload.application.artifact is not None
+        return [
+            dbx_jobs.JobEnvironment(
+                environment_key=_SERVERLESS_ENVIRONMENT_KEY,
+                spec=dbx_compute.Environment(
+                    environment_version=_SERVERLESS_ENVIRONMENT_VERSION,
+                    dependencies=[workload.application.artifact],
+                ),
+            )
+        ]
+
     async def submit(self, run: RunRequest) -> ProviderRun:
         task = self.build_run_submission(run)
+        environments = self.build_job_environments(run)
         try:
             result = self._get_client().jobs.submit(
                 run_name=f"{run.resolved.workload.metadata.name}-{run.run_id}",
                 tasks=[task],
+                environments=environments or None,
                 # run.run_id is the run's own stable UUID (spec §26/§67) —
                 # a retried submit() with the same token returns the
                 # existing run instead of creating a second real

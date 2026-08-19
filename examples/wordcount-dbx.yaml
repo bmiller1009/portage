@@ -1,0 +1,51 @@
+apiVersion: runtime/v1alpha1
+kind: SparkWorkload
+
+metadata:
+  name: wordcount-dbx
+  version: "0.1.0"
+
+runtime:
+  # 4.1, not 4.2 (unlike wordcount.yaml) — same reason as
+  # claims-normalization.yaml (spec §66): no Databricks Runtime ships 4.2
+  # yet (see providers/execution/databricks/provider.py's
+  # _SUPPORTED_SPARK_VERSIONS). Same artifact reference as wordcount.yaml
+  # (same wheel, same code, zero application changes) — only the
+  # portable workload's declared target Spark version differs, which is
+  # exactly what provider translation exists to accommodate.
+  spark: "4.1"
+
+application:
+  type: python-wheel
+  artifact: artifact://wordcount/0.1.0
+  entryPoint: wordcount.jobs.count
+
+arguments:
+  - "--business-date"
+  - "${RUN_DATE}"
+
+datasets:
+  inputs:
+    text:
+      dataset: wordcount.raw
+
+  outputs:
+    counts:
+      dataset: wordcount.counts
+
+resources:
+  driver:
+    cores: 1
+    memory: 2Gi
+
+  executor:
+    cores: 1
+    memory: 2Gi
+
+  scaling:
+    minExecutors: 1
+    maxExecutors: 2
+
+execution:
+  timeout: 30m
+  retries: 0

@@ -25,6 +25,7 @@ class FakeJobsAPI:
 
     def __init__(self):
         self.submitted_tasks: list | None = None
+        self.submitted_environments: list | None = None
         self.submitted_run_name: str | None = None
         self.submitted_idempotency_token: str | None = None
         self.canceled_run_id: int | None = None
@@ -33,11 +34,12 @@ class FakeJobsAPI:
         self.raise_on_get_run: Exception | None = None
         self.raise_on_cancel_run: Exception | None = None
 
-    def submit(self, *, run_name, tasks, idempotency_token=None):
+    def submit(self, *, run_name, tasks, environments=None, idempotency_token=None):
         if self.raise_on_submit is not None:
             raise self.raise_on_submit
         self.submitted_run_name = run_name
         self.submitted_tasks = tasks
+        self.submitted_environments = environments
         self.submitted_idempotency_token = idempotency_token
         return SimpleNamespace(run_id=42)
 
@@ -144,6 +146,97 @@ def test_build_run_submission_jar_shape(profile, resolved_jar_run):
     assert task.python_wheel_task is None
     assert task.libraries is not None
     assert task.libraries[0].jar == "local:///opt/spark/examples/jars/spark-examples.jar"
+
+
+def test_build_run_submission_serverless_uses_environment_key_not_new_cluster(resolved_run):
+    # Confirmed live (v0.3): some workspaces reject new_cluster entirely
+    # ("Only serverless compute is supported").
+    profile = DatabricksProfile(
+        host="https://example.databricks.com", cluster_node_type_id="i3.xlarge", serverless=True
+    )
+    task = DatabricksExecutionProvider(profile).build_run_submission(resolved_run)
+
+    assert task.new_cluster is None
+    assert task.environment_key == "portage-serverless"
+    assert task.libraries is None
+    assert task.python_wheel_task is not None
+    assert task.python_wheel_task.package_name == "wordcount"
+
+
+def test_build_run_submission_serverless_rejects_jvm_jar(resolved_jar_run):
+    from control_plane.execution_provider import TerminalProviderError
+
+    profile = DatabricksProfile(
+        host="https://example.databricks.com", cluster_node_type_id="i3.xlarge", serverless=True
+    )
+
+    with pytest.raises(TerminalProviderError, match="serverless"):
+        DatabricksExecutionProvider(profile).build_run_submission(resolved_jar_run)
+
+
+def test_build_job_environments_empty_for_non_serverless(profile, resolved_run):
+    assert DatabricksExecutionProvider(profile).build_job_environments(resolved_run) == []
+
+
+def test_build_job_environments_serverless_references_wheel_artifact(resolved_run):
+    profile = DatabricksProfile(
+        host="https://example.databricks.com", cluster_node_type_id="i3.xlarge", serverless=True
+    )
+    environments = DatabricksExecutionProvider(profile).build_job_environments(resolved_run)
+
+    assert len(environments) == 1
+    assert environments[0].environment_key == "portage-serverless"
+    spec = environments[0].spec
+    assert spec is not None
+    assert spec.environment_version == "4"
+    assert spec.dependencies == ["artifact://wordcount/0.1.0"]
+
+
+def test_submit_passes_environments_through(resolved_run):
+    profile = DatabricksProfile(
+        host="https://example.databricks.com", cluster_node_type_id="i3.xlarge", serverless=True
+    )
+    fake_jobs = FakeJobsAPI()
+    provider = DatabricksExecutionProvider(profile, client=cast(WorkspaceClientLike, SimpleNamespace(jobs=fake_jobs)))
+
+    asyncio.run(provider.submit(resolved_run))
+
+    assert fake_jobs.submitted_environments is not None
+    assert fake_jobs.submitted_environments[0].environment_key == "portage-serverless"
+
+
+def test_build_run_submission_serverless_appends_spark_conf_as_parameters(resolved_run):
+    # Confirmed live (v0.3): neither spark_conf (no ClusterSpec under
+    # serverless) nor environment_variables_key (doesn't actually reach a
+    # serverless python_wheel_task's process env) work -- --key=value
+    # parameters, read back via sys.argv, is what actually does. Must
+    # match examples/wordcount_app/wordcount/jobs.py::_portable_config()'s
+    # own sys.argv parsing exactly.
+    profile = DatabricksProfile(
+        host="https://example.databricks.com", cluster_node_type_id="i3.xlarge", serverless=True
+    )
+    task = DatabricksExecutionProvider(profile).build_run_submission(resolved_run)
+
+    assert task.python_wheel_task is not None
+    assert task.python_wheel_task.parameters == [
+        "--business-date",
+        "${RUN_DATE}",
+        "--spark.portable.dataset.wordcount.raw.uri=s3a://portage-phase0/wordcount/input.txt",
+        "--spark.portable.dataset.wordcount.counts.uri=s3a://portage-phase0/wordcount/output",
+    ]
+
+
+def test_build_run_submission_serverless_keeps_workload_arguments_before_spark_conf(resolved_run):
+    resolved_run.resolved.workload.arguments = ["--business-date", "2026-08-19"]
+    profile = DatabricksProfile(
+        host="https://example.databricks.com", cluster_node_type_id="i3.xlarge", serverless=True
+    )
+    task = DatabricksExecutionProvider(profile).build_run_submission(resolved_run)
+
+    assert task.python_wheel_task is not None
+    parameters = task.python_wheel_task.parameters
+    assert parameters is not None
+    assert parameters[:2] == ["--business-date", "2026-08-19"]
 
 
 def test_validate_accepts_jvm_jar(profile, resolved_jar_run):

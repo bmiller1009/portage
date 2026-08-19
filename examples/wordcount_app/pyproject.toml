@@ -9,9 +9,18 @@ description = "Portage Phase 0 example workload — a real PySpark word-count ET
 requires-python = ">=3.10"
 
 # pyspark itself is provided by the Spark base image at runtime (spec §17 —
-# application artifact vs. execution runtime image are separate concerns);
-# it's listed here only so the wheel is locally testable/importable.
-dependencies = ["pyspark==4.2.0"]
+# application artifact vs. execution runtime image are separate concerns), so
+# it's deliberately NOT a real runtime dependency of the distributed wheel —
+# only an optional dev-time convenience for local import/testing (`pip
+# install -e ".[dev]"`). This isn't just tidiness: confirmed live (v0.3)
+# that Databricks Serverless's library installer has no --no-deps
+# equivalent (unlike the Kubernetes image's own `pip install --no-deps`,
+# see providers/execution/kubernetes/image/), so a declared pyspark
+# dependency here fails serverless job-environment installation outright.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pyspark==4.2.0"]
 
 # Registers "count" as a console-script entry point so the same wheel is
 # invocable by both providers: the Kubernetes provider's generic launcher

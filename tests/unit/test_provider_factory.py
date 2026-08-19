@@ -103,6 +103,39 @@ def test_build_execution_provider_databricks_passes_through_credential_reference
     }
 
 
+def test_build_execution_provider_databricks_passes_through_serverless():
+    # Confirmed live (v0.3): some workspaces reject new_cluster entirely,
+    # so this flag has to actually reach DatabricksProfile, not just exist
+    # on it.
+    profile = ExecutionProfile(
+        name="dbx",
+        provider="databricks",
+        config={
+            "host": "https://example.databricks.com",
+            "cluster_node_type_id": "i3.xlarge",
+            "serverless": True,
+        },
+    )
+
+    provider = build_execution_provider(profile)
+
+    assert isinstance(provider, DatabricksExecutionProvider)
+    assert provider.profile.serverless is True
+
+
+def test_build_execution_provider_databricks_serverless_defaults_false():
+    profile = ExecutionProfile(
+        name="dbx",
+        provider="databricks",
+        config={"host": "https://example.databricks.com", "cluster_node_type_id": "i3.xlarge"},
+    )
+
+    provider = build_execution_provider(profile)
+
+    assert isinstance(provider, DatabricksExecutionProvider)
+    assert provider.profile.serverless is False
+
+
 def test_build_execution_provider_unsupported():
     profile = ExecutionProfile(name="x", provider="not-a-real-provider", config={})
     with pytest.raises(UnsupportedProviderError):

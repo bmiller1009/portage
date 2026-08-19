@@ -50,6 +50,7 @@ def build_execution_provider(execution_profile: ExecutionProfile) -> ExecutionPr
             num_workers=config.get("num_workers", 1),
             runtime_profiles=config.get("runtimeProfiles", {}),
             credential_reference=config.get("credential_reference", {}),
+            serverless=config.get("serverless", False),
         )
         # No client constructed here — DatabricksExecutionProvider builds
         # a real WorkspaceClient lazily, only when submit/status/cancel is
