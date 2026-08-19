@@ -47,6 +47,18 @@ reconciler:
   # enable it once you know where. Grants into the release namespace by
   # default; list any other namespaces Spark workloads run in under
   # additionalNamespaces.
+  #
+  # IMPORTANT, confirmed live during v1.0.0 release-hardening: the release
+  # namespace alone is usually NOT where Spark workloads actually run —
+  # check every registered kubernetes ExecutionProfile's own
+  # config.namespace value (e.g. "default") and include each one here, or
+  # every submission will fail with a genuine 403 Forbidden even though
+  # RBAC is "enabled." A helm upgrade that changes serviceAccount.create
+  # from false to true (or vice versa) also changes which ServiceAccount
+  # identity the reconciler runs as — any RBAC grant bound to the old
+  # identity (e.g. a hand-applied grant against the namespace's implicit
+  # `default` ServiceAccount) becomes silently orphaned, not an error at
+  # upgrade time.
   rbac:
     create: false
     additionalNamespaces: []
