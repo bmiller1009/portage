@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "portage.fullname" . }}-api
+  labels:
+    {{- include "portage.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "portage.labels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "portage.labels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+    spec:
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "{{ .Values.api.port }}"]
+          ports:
+            - name: http
+              containerPort: {{ .Values.api.port }}
+          env:
+            {{- include "portage.databaseEnv" . | nindent 12 }}
+            - name: PORTAGE_AUTH_MODE
+              value: {{ .Values.auth.mode | quote }}
+            {{- if .Values.auth.groupRoles }}
+            - name: PORTAGE_AUTH_GROUP_ROLES
+              value: {{ .Values.auth.groupRoles | quote }}
+            {{- end }}
+            {{- if .Values.auth.oidcJwksUri }}
+            - name: PORTAGE_OIDC_JWKS_URI
+              value: {{ .Values.auth.oidcJwksUri | quote }}
+            {{- end }}
+            {{- if .Values.auth.oidcIssuer }}
+            - name: PORTAGE_OIDC_ISSUER
+              value: {{ .Values.auth.oidcIssuer | quote }}
+            {{- end }}
+            {{- if .Values.auth.oidcAudience }}
+            - name: PORTAGE_OIDC_AUDIENCE
+              value: {{ .Values.auth.oidcAudience | quote }}
+            {{- end }}
+          envFrom:
+            {{- include "portage.credentialsEnvFrom" . | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+          resources:
+            {{- toYaml .Values.api.resources | nindent 12 }}

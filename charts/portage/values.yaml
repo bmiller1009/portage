@@ -1,0 +1,58 @@
+image:
+  repository: portage/control-plane
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+api:
+  replicaCount: 2
+  port: 8000
+  service:
+    type: ClusterIP
+  resources: {}
+
+reconciler:
+  replicaCount: 2
+  metricsPort: 9091
+  reconcileIntervalSeconds: 5
+  resources: {}
+
+# spec §46: "external/HA PostgreSQL" — bring your own, not bundled by this
+# chart. existingSecretName must name a Secret (created out-of-band) with
+# a key (existingSecretKey) holding a postgresql+asyncpg:// URL, per
+# control_plane/db.py's DATABASE_URL contract.
+database:
+  existingSecretName: ""
+  existingSecretKey: DATABASE_URL
+
+# Optional Secret whose keys are exposed as env vars (envFrom) to both the
+# API and reconciler pods — populates whatever PORTAGE_*_ACCESS_KEY /
+# PORTAGE_DATABRICKS_CLIENT_SECRET / etc. env vars the ExecutionProfile/
+# StorageProfile rows' own credential_reference fields expect
+# (control_plane/credentials.py). The chart doesn't enumerate these itself
+# since the set of names is open-ended and profile-defined.
+credentials:
+  existingSecretName: ""
+
+# spec §33-34/§67 (api/auth.py). mode: disabled|enforced — mirrors
+# PORTAGE_AUTH_MODE's own default, so an unconfigured chart install still
+# behaves like unconfigured `make dev` (every caller is PlatformAdmin).
+auth:
+  mode: disabled
+  groupRoles: ""
+  oidcJwksUri: ""
+  oidcIssuer: ""
+  oidcAudience: ""
+
+# TLS terminates here, not in-process (spec §46 lists "Ingress/load
+# balancer" and "TLS" as separate recommended items) — tlsSecretName is
+# expected to hold a TLS keypair, e.g. issued by cert-manager when
+# certManagerIssuer is set (adds the cert-manager.io/cluster-issuer
+# annotation; the Certificate/Secret itself is cert-manager's concern,
+# not this chart's).
+ingress:
+  enabled: false
+  className: nginx
+  host: ""
+  tlsSecretName: ""
+  certManagerIssuer: ""
+  annotations: {}

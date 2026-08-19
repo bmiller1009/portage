@@ -1,0 +1,12 @@
+.venv/
+.git/
+node_modules/
+ui/
+sdk/
+tests/
+docs/
+examples/
+terraform/
+integrations/
+**/__pycache__/
+**/*.pyc
