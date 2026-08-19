@@ -54,13 +54,28 @@ def test_storage_protocol_label_distinguishes_vast_modes():
     "execution_provider,storage_protocol,expected",
     [
         ("kubernetes", "s3", certification.STATUS_PASS),
-        ("kubernetes", "vast-s3", certification.STATUS_PASS),
+        # No Kubernetes-execution + VAST-S3-storage workload was ever
+        # actually submitted and run together — VAST-S3's own storage
+        # code is live-tested (it delegates entirely to the
+        # already-live-tested S3StorageProvider), but that's evidence
+        # about the storage component alone, not this specific pairing.
+        # This must stay BLOCKED even though both components are
+        # individually verified elsewhere — capabilities compose,
+        # verification evidence does not (spec §78).
+        ("kubernetes", "vast-s3", certification.STATUS_BLOCKED),
         ("kubernetes", "vast-nfs", certification.STATUS_BLOCKED),
         ("kubernetes", "adls", certification.STATUS_BLOCKED),
         # Live-verified since v0.3 (real OAuth M2M runs), including
         # v1.0.0's Spark 4.2 run — paired with Unity Catalog Volumes
         # storage, registered under the "s3" storage-provider type.
         ("databricks", "s3", certification.STATUS_PASS),
+        # The exact requirements-doc example of the cross-product bug:
+        # Databricks execution and VAST-S3 storage are each independently
+        # live-verified elsewhere, but never together as a pair (Databricks
+        # execution has only ever been paired with Unity Catalog Volumes
+        # storage; no on-prem VAST hardware is network-reachable from
+        # Databricks' cloud compute regardless).
+        ("databricks", "vast-s3", certification.STATUS_BLOCKED),
         # ADLS itself remains translation-layer-only (no real Azure
         # subscription available to this project) regardless of which
         # execution provider it's paired with.
@@ -71,6 +86,40 @@ def test_status_for_matches_this_projects_live_verification_history(
     execution_provider, storage_protocol, expected
 ):
     assert certification._status_for(execution_provider, storage_protocol) == expected
+
+
+def test_independently_verified_providers_do_not_imply_verified_pair():
+    """Regression test for the cross-product bug (see certification.py's
+    module docstring): guards against _status_for() ever being
+    reimplemented as `execution_provider in verified_execution_set and
+    storage_protocol in verified_storage_set` instead of exact-pair
+    membership.
+
+    Constructs every (execution_provider, storage_protocol) pair drawn
+    from the sides that individually appear *somewhere* in
+    _LIVE_VERIFIED_COMBINATIONS, plus a synthetic pair
+    ("databricks", "vast-s3") — the requirements doc's own example of two
+    independently-verified components whose combination was never run
+    together. A cross-product implementation would incorrectly mark every
+    one of these PASS just because each side appears in some verified
+    pair; pair-specific evidence must mark every pair that isn't itself in
+    _LIVE_VERIFIED_COMBINATIONS as BLOCKED."""
+    verified_execution_providers = {ep for ep, _ in certification._LIVE_VERIFIED_COMBINATIONS}
+    verified_storage_protocols = {sp for _, sp in certification._LIVE_VERIFIED_COMBINATIONS}
+    assert "databricks" in verified_execution_providers  # sanity: the fixture is real
+
+    candidate_pairs = {
+        (ep, sp) for ep in verified_execution_providers for sp in verified_storage_protocols
+    }
+    candidate_pairs.add(("databricks", "vast-s3"))
+
+    for execution_provider, storage_protocol in candidate_pairs:
+        if (execution_provider, storage_protocol) in certification._LIVE_VERIFIED_COMBINATIONS:
+            continue  # an actually-verified pair — correctly PASS, not what this test guards
+        assert certification._status_for(execution_provider, storage_protocol) == certification.STATUS_BLOCKED, (
+            f"({execution_provider}, {storage_protocol}) must be BLOCKED — each side is "
+            "independently verified elsewhere, but this exact pair never was"
+        )
 
 
 @pytest.mark.asyncio

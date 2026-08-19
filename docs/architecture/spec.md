@@ -2057,6 +2057,8 @@ Databricks Runtime 19 + ADLS           PASS
 
 Third-party vendors could execute the public suite themselves. The conformance tests should be deterministic and open source.
 
+**Design invariant: capabilities compose, verification evidence does not.** An execution provider declaring Spark support and a storage provider declaring data access means that combination is logically usable — the two capability declarations compose freely. It does not mean that exact execution+storage pair has been live-verified. `plane conformance report`'s `PASS` status for a given pair must be backed by evidence of that specific pair actually having been run together, never inferred from each side being independently verified elsewhere (`control_plane/certification.py`'s `_LIVE_VERIFIED_COMBINATIONS` tracks pairs explicitly for exactly this reason — see its module docstring for a real bug this distinction fixed in v1.0.0).
+
 ## 79. Primary Product Metrics
 
 Do not initially optimize for: number of features, number of integrations, lines of code.

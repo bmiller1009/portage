@@ -109,7 +109,7 @@ Portage will not become a notebook environment, BI/dashboard platform, visual ET
 
 ## Compatibility matrix
 
-Terminology: **SUPPORTED** — the code path exists and is exercised by tests. **AVAILABLE** — confirmed to exist/be compatible via a live infrastructure query, but no full workload was actually run under it. **TESTED** — actually run against real infrastructure at least once. **CERTIFIED** — passes the full automated provider-contract suite against real infrastructure. **EXPERIMENTAL** — implemented and unit-tested against fakes only; no real infrastructure available to this project to test against.
+Terminology: **SUPPORTED** — the code path exists and is exercised by tests. **AVAILABLE** — confirmed to exist/be compatible via a live infrastructure query, but no full workload was actually run under it. **TESTED** — actually run against real infrastructure at least once. **CERTIFIED** — passes the full automated provider-contract suite against real infrastructure. **EXPERIMENTAL** — implemented and unit-tested against fakes only; no real infrastructure available to this project to test against. `CERTIFIED` below is per-component (e.g. "S3/MinIO passes its own contract suite against real infrastructure") — it does **not** mean every execution-provider/storage-provider combination has been verified together. See [Certified combinations](#certified-combinations) below for that, pair-specific, claim.
 
 | Component | Status |
 |---|---|
@@ -128,6 +128,21 @@ Terminology: **SUPPORTED** — the code path exists and is exercised by tests. *
 | Iceberg REST Catalog / Trino / Kyuubi | TESTED (v0.5, fully self-hostable, live-verified end to end) |
 
 Never inferred from vendor documentation alone where a real check was possible — see [`docs/verification/v1.0.0.md`](docs/verification/v1.0.0.md) for exactly how each row above was verified and its commit SHA.
+
+### Certified combinations
+
+The component-level table above answers "is this piece verified?" — it does not answer "has *this exact execution+storage combination* been run together?" Those are different claims: capabilities compose (any execution provider can, in principle, be paired with any storage provider), but verification evidence does not — a combination is only certified if that exact pair was actually run, never inferred from each side being independently verified elsewhere. `plane conformance report` / `GET /v1/conformance/report` (`control_plane/certification.py`) enforces this explicitly, tracking verified pairs rather than computing a cross-product of independently-verified providers:
+
+| Combination | Contract tests | Live infrastructure | Certification |
+|---|---:|---:|---:|
+| Kubernetes + S3/MinIO | PASS | PASS | CERTIFIED |
+| Databricks Serverless + Unity Catalog Volumes (registered as `s3`) | PASS | PASS | CERTIFIED |
+| Kubernetes + VAST S3 mode | PASS | NOT_RUN as a pair | NOT CERTIFIED |
+| Kubernetes + VAST NFS mode | PASS | NOT_RUN | NOT CERTIFIED |
+| Databricks + ADLS | PASS | NOT_RUN | NOT CERTIFIED |
+| Databricks + VAST (either mode) | PASS | NOT_RUN as a pair | NOT CERTIFIED |
+
+VAST S3 mode's storage-provider code is itself live-tested (it delegates entirely to the already-live-tested S3 provider — see `providers/storage/vast/provider.py`), but that's evidence about the storage component alone, not about a Kubernetes+VAST-S3 workload actually having been submitted and run — hence "NOT CERTIFIED" for that row despite "PASS" on both underlying components individually. See `tests/unit/test_certification.py` for the tests enforcing this distinction.
 
 ## Known limitations
 

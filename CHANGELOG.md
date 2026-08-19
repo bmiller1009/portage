@@ -48,6 +48,10 @@ infrastructure, not simulated.
   null counts, partition coverage, deterministic hashes — backs
   `plane conformance test` (dynamic, run-based) and
   `plane conformance report` (static, provider-certification-style).
+  Certification is pair-specific — an execution+storage combination is
+  only `PASS` if that exact pair was actually verified, never inferred
+  from each side being independently verified elsewhere (see
+  [README.md's Certified combinations](README.md#certified-combinations)).
 - `examples/claims_app`: a genuine two-input join workload, the actual
   hero-demo proof — same workload file, same artifact reference,
   semantically equivalent output (the guarantee above) on both a real
