@@ -28,24 +28,23 @@ Spark workloads accumulate infrastructure coupling by default — cluster-specif
 The same workload definition, run against different environments:
 
 ```bash
-plane run claims-normalization --environment onprem-prod   # Kubernetes + VAST
-plane run claims-normalization --environment azure-prod    # Databricks + ADLS
+plane run claims-normalization --environment kubernetes-env   # Kubernetes execution
+plane run claims-normalization --environment databricks-env   # Databricks execution
 ```
 
 No code changes. No infrastructure objects in the workload definition. Same workload file, same application artifact, same logical dataset names — only the environment name differs.
 
-This isn't a slide — it's live-verified. `examples/claims_app` is a real two-input-join Spark workload (raw claims joined against a provider reference table, not just a map/reduce) that has actually reached `SUCCEEDED` with **byte-identical output** on both a real Kubernetes cluster and a real Databricks Serverless workspace. See [`docs/verification/v1.0.0.md`](docs/verification/v1.0.0.md) for exactly what was tested and how to reproduce it.
+This isn't a slide — it's live-verified. `examples/claims_app` is a real two-input-join Spark workload (raw claims joined against a provider reference table, not just a map/reduce) that has actually reached `SUCCEEDED` with **byte-identical output** on a real Kubernetes cluster (execution provider `kubernetes`, storage provider `s3` against real MinIO) and a real Databricks Serverless workspace (execution provider `databricks`, output written to and confirmed in a Databricks-managed Unity Catalog volume). See [`docs/providers/kubernetes.md`](docs/providers/kubernetes.md), [`docs/providers/databricks.md`](docs/providers/databricks.md), and [`docs/verification/v1.0.0.md`](docs/verification/v1.0.0.md) for exactly what was tested and how to reproduce it.
 
 - **Reproducible locally, no credentials needed**: `make dev && plane run examples/wordcount.yaml --environment local` (see [Quick start](#quick-start)).
-- **Verified live, requires real infrastructure you won't have**: the Kubernetes+VAST / Databricks+ADLS run above needs a real cluster and real Databricks workspace credentials — reproducing it requires standing up that infrastructure yourself, not something a reader can run from a laptop.
+- **Verified live, requires real infrastructure you won't have**: the run above needs a real Kubernetes cluster and real Databricks workspace credentials — reproducing it requires standing up that infrastructure yourself, not something a reader can run from a laptop. VAST and ADLS are implemented as storage providers but were **not** part of this live-verified execution path — see [Supported environments](#supported-environments) and the [compatibility matrix](#compatibility-matrix) below for their actual, more limited verification status.
 
 ## Supported environments
 
 | Execution | Storage |
 |---|---|
-| Kubernetes (Apache Spark Kubernetes Operator) | S3 / S3-compatible (MinIO, VAST S3 mode) |
-| Databricks (Serverless — live-tested; classic clusters — supported, not live-tested against this project's own workspace, which forbids them) | VAST (S3 mode and NFS mode) |
-| | ADLS |
+| Kubernetes (Apache Spark Kubernetes Operator) — live-tested | S3 / S3-compatible (MinIO) — live-tested; VAST S3 mode — live-tested against real MinIO standing in for VAST's S3-compatible wire protocol, no real VAST hardware |
+| Databricks (Serverless — live-tested; classic clusters — supported, not live-tested against this project's own workspace, which forbids them) | VAST NFS mode and ADLS — implemented and unit-tested against fakes only, not live-tested against real hardware/a real Azure subscription |
 
 See the [compatibility matrix](#compatibility-matrix) below for exactly what's tested vs. experimental.
 
@@ -110,7 +109,7 @@ Portage will not become a notebook environment, BI/dashboard platform, visual ET
 
 ## Compatibility matrix
 
-Terminology: **SUPPORTED** — the code path exists and is exercised by tests. **TESTED** — actually run against real infrastructure at least once. **CERTIFIED** — passes the full automated provider-contract suite against real infrastructure. **EXPERIMENTAL** — implemented and unit-tested against fakes only; no real infrastructure available to this project to test against.
+Terminology: **SUPPORTED** — the code path exists and is exercised by tests. **AVAILABLE** — confirmed to exist/be compatible via a live infrastructure query, but no full workload was actually run under it. **TESTED** — actually run against real infrastructure at least once. **CERTIFIED** — passes the full automated provider-contract suite against real infrastructure. **EXPERIMENTAL** — implemented and unit-tested against fakes only; no real infrastructure available to this project to test against.
 
 | Component | Status |
 |---|---|
@@ -119,7 +118,9 @@ Terminology: **SUPPORTED** — the code path exists and is exercised by tests. *
 | Kubernetes | 1.34 (TESTED) |
 | Apache Spark Kubernetes Operator | 1.8.0 chart / 1.0.0 app version (TESTED) |
 | Apache Spark on Kubernetes | 4.1, 4.2 (CERTIFIED — provider contract suite + live runs) |
-| Databricks Runtime | 17.3 LTS (Spark 4.0), 18.2 (Spark 4.1), 19 (Spark 4.2) — all TESTED live against a real workspace |
+| Databricks Runtime 17.3 LTS (Spark 4.0) | AVAILABLE — compatibility mapping confirmed live via a real workspace's `clusters.spark_versions()`; no full hero-workload execution run under this exact version |
+| Databricks Runtime 18.2 (Spark 4.1) | TESTED — the hero-demo workload (`examples/claims_app`) reached `SUCCEEDED` live under this version |
+| Databricks Runtime 19 (Spark 4.2) | TESTED — a version-bumped copy of the hero-demo workload reached `SUCCEEDED` live under this version (v1.0.0 release-hardening pass) |
 | S3 / S3-compatible (MinIO) | CERTIFIED |
 | VAST, S3 mode | TESTED (live-verified against real MinIO; VAST's own hardware not available to this project) |
 | VAST, NFS mode | EXPERIMENTAL (no VAST hardware available to this project) |
