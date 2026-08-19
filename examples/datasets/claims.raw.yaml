@@ -1,0 +1,10 @@
+apiVersion: runtime/v1
+kind: Dataset
+
+metadata:
+  name: claims.raw
+
+bindings:
+  k8s-remote:
+    kind: path
+    uri: s3a://portage-phase0/claims/raw.csv

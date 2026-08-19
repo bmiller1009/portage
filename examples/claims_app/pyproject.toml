@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "claims"
+version = "4.18.2"
+description = "Portage v1.0 example workload — a real PySpark claims-normalization ETL (a two-input join, not just a map/reduce), used to prove the portable workload contract against a genuinely nontrivial job (docs/architecture/spec.md §66)."
+requires-python = ">=3.10"
+
+# pyspark itself is provided by the Spark base image at runtime (spec §17),
+# so it's deliberately NOT a real runtime dependency of the distributed
+# wheel — only an optional dev-time convenience for local import/testing
+# (`pip install -e ".[dev]"`), matching examples/wordcount_app's own
+# pyproject.toml and its confirmed-live reasoning: Databricks Serverless's
+# library installer has no --no-deps equivalent, so a declared pyspark
+# dependency here would fail serverless job-environment installation.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pyspark==4.2.0", "pytest>=8.0"]
+
+# Registers "normalize" as a console-script entry point — the Kubernetes
+# provider's generic launcher imports claims.jobs and calls normalize()
+# directly (providers/execution/kubernetes/provider.py); the Databricks
+# provider's python_wheel_task addresses this same entry point by name
+# (providers/execution/databricks/provider.py's _split_entry_point splits
+# "claims.jobs.normalize" into package "claims", entry point "normalize").
+[project.scripts]
+normalize = "claims.jobs:normalize"
+
+[tool.setuptools.packages.find]
+include = ["claims*"]
