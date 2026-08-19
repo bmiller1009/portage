@@ -1,0 +1,91 @@
+name: Live Provider Verification
+
+# tests/chaos/ and the live legs of tests/integration/ need a real
+# Kubernetes cluster, Spark Operator, MinIO, and (for the Databricks
+# example) a real workspace — infrastructure that only exists on this
+# project's on-prem remote dev box, on a private network no GitHub-hosted
+# runner can reach directly (see tests/chaos/README.md, tests/integration/
+# README.md — "run manually, e.g. over SSH on that box"). This workflow
+# automates exactly that: SSH onto the box and run the same commands a
+# developer already runs by hand, on a schedule instead of only when
+# someone remembers to.
+#
+# Deliberately NOT run on every PR (req #15) — real infrastructure,
+# real cost, and genuine flakiness sources (network, a shared dev cluster)
+# that don't belong gating routine merges.
+#
+# Required repository secrets (Settings -> Secrets and variables -> Actions
+# -> New repository secret) — this workflow does nothing useful until
+# these exist:
+#   PORTAGE_DEV_BOX_SSH_KEY       private key for SSH access to the box
+#   PORTAGE_DEV_BOX_HOST          e.g. 172.16.2.241 (or a hostname)
+#   PORTAGE_DEV_BOX_USER          e.g. brza
+#   PORTAGE_DEV_BOX_HOST_KEY      output of `ssh-keyscan <host>`, pinned
+#                                 ahead of time rather than trust-on-first-
+#                                 use from a CI runner
+#   PORTAGE_LIVE_DATABRICKS_HOST / _CLIENT_ID / _CLIENT_SECRET
+#                                 real workspace OAuth M2M credentials, for
+#                                 the Databricks leg of tests/integration
+on:
+  schedule:
+    - cron: "0 6 * * 0" # weekly, Sunday 06:00 UTC
+  workflow_dispatch: {}
+
+jobs:
+  live-provider:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PORTAGE_DEV_BOX_SSH_KEY }}
+
+      - name: Pin the remote host key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PORTAGE_DEV_BOX_HOST_KEY }}" >> ~/.ssh/known_hosts
+
+      # Credentials are forwarded as env vars to the remote shell, not
+      # interpolated into the command string GitHub Actions logs — `ssh
+      # ... env VAR=$VAR ...' would still show the *names*, never the
+      # values, in the Action's own log output. They will appear in the
+      # remote box's own process list / shell history for the duration of
+      # this run, the same exposure a human already accepts running these
+      # tests by hand per tests/chaos/README.md — not a new risk this
+      # workflow introduces.
+      - name: Run tests/chaos against the real remote cluster
+        env:
+          PORTAGE_CHAOS_NAMESPACE: portage-system
+          MINIO_ENDPOINT: http://minio.portage-storage.svc.cluster.local:9000
+        run: |
+          # shellcheck disable=SC2029  # intentional: expands client-side
+          # so the runner's own env (above) reaches the remote command.
+          ssh "${{ secrets.PORTAGE_DEV_BOX_USER }}@${{ secrets.PORTAGE_DEV_BOX_HOST }}" \
+            "cd ~/portage && git fetch origin main && git checkout origin/main && \
+             source .venv/bin/activate && pip install -e '.[dev]' -q && \
+             PORTAGE_CHAOS_NAMESPACE='${PORTAGE_CHAOS_NAMESPACE}' \
+             MINIO_ENDPOINT='${MINIO_ENDPOINT}' \
+             python -m pytest tests/chaos -v -s"
+
+      - name: Run live Kubernetes/S3 integration tests against the real remote cluster
+        run: |
+          ssh "${{ secrets.PORTAGE_DEV_BOX_USER }}@${{ secrets.PORTAGE_DEV_BOX_HOST }}" \
+            "cd ~/portage && source .venv/bin/activate && \
+             python -m pytest tests/integration/test_s3_provider_minio.py -v"
+
+      # VAST is deliberately excluded — no CI-reachable VAST hardware
+      # exists (same documented gap as everywhere else in this project).
+      - name: Databricks live smoke run
+        env:
+          DATABRICKS_HOST: ${{ secrets.PORTAGE_LIVE_DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.PORTAGE_LIVE_DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.PORTAGE_LIVE_DATABRICKS_CLIENT_SECRET }}
+        run: |
+          # shellcheck disable=SC2029  # intentional, see the chaos step above.
+          ssh "${{ secrets.PORTAGE_DEV_BOX_USER }}@${{ secrets.PORTAGE_DEV_BOX_HOST }}" \
+            "cd ~/portage && source .venv/bin/activate && \
+             DATABRICKS_HOST='${DATABRICKS_HOST}' \
+             DATABRICKS_CLIENT_ID='${DATABRICKS_CLIENT_ID}' \
+             DATABRICKS_CLIENT_SECRET='${DATABRICKS_CLIENT_SECRET}' \
+             PORTAGE_API_URL=http://127.0.0.1:8124 \
+             plane run examples/wordcount-dbx.yaml --environment azure-dbx-v1"

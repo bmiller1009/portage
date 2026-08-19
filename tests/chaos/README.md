@@ -7,11 +7,15 @@ plane while a job is running, confirm the job continues and
 reconciliation converges — is spec §57's "mandatory v1.0 acceptance
 test."
 
-Not run in CI: needs a live cluster, a real Kubernetes execution provider
-the reconciler can actually submit Spark jobs to, and enough plumbing
-(RBAC, MinIO, the Spark Operator) that only the project's remote dev box
-has — same category as `tests/integration/test_s3_provider_minio.py`.
-Run manually, e.g. over SSH on that box:
+Not run on every PR: needs a live cluster, a real Kubernetes execution
+provider the reconciler can actually submit Spark jobs to, and enough
+plumbing (RBAC, MinIO, the Spark Operator) that only the project's remote
+dev box has — same category as `tests/integration/test_s3_provider_minio.py`.
+Instead, `.github/workflows/live-provider.yml` runs this suite weekly
+(and on manual `workflow_dispatch`) by SSHing onto that box and running
+the same command a developer would run by hand — see that workflow file
+for the required repository secrets. To run it yourself manually, e.g.
+over SSH on that box:
 
 ```bash
 PORTAGE_CHAOS_NAMESPACE=portage-system \
