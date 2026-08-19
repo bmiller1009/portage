@@ -109,6 +109,57 @@ def test_get_run_not_found_returns_404(monkeypatch):
     assert resp.status_code == 404
 
 
+def test_get_run_omits_failure_for_a_healthy_run(monkeypatch):
+    run = Run(
+        id=uuid.uuid4(),
+        workload_name="wordcount",
+        workload_version="0.1.0",
+        environment_name="k8s-remote",
+        state="RUNNING",
+    )
+    monkeypatch.setattr(run_service, "get_run", AsyncMock(return_value=run))
+    monkeypatch.setattr(run_service, "get_run_failure", AsyncMock(return_value=None))
+
+    resp = client.get(f"/v1/runs/{run.id}")
+
+    assert resp.status_code == 200
+    assert resp.json()["failure"] is None
+
+
+def test_get_run_surfaces_structured_failure(monkeypatch):
+    run = Run(
+        id=uuid.uuid4(),
+        workload_name="wordcount",
+        workload_version="0.1.0",
+        environment_name="k8s-remote",
+        state="FAILED",
+    )
+    monkeypatch.setattr(run_service, "get_run", AsyncMock(return_value=run))
+    monkeypatch.setattr(
+        run_service,
+        "get_run_failure",
+        AsyncMock(
+            return_value=run_service.RunFailure(
+                category="WORKLOAD_EXECUTION",
+                disposition="terminal",
+                retryable=False,
+                summary="Spark driver exited non-zero",
+                provider="kubernetes",
+                diagnostic_reference=f"/v1/runs/{run.id}/events",
+            )
+        ),
+    )
+
+    resp = client.get(f"/v1/runs/{run.id}")
+
+    assert resp.status_code == 200
+    failure = resp.json()["failure"]
+    assert failure["category"] == "WORKLOAD_EXECUTION"
+    assert failure["retryable"] is False
+    assert failure["provider"] == "kubernetes"
+    assert failure["summary"] == "Spark driver exited non-zero"
+
+
 def test_list_run_events(monkeypatch):
     events = [
         RunEvent(run_id=uuid.uuid4(), from_state=None, to_state="ACCEPTED", message="run accepted"),

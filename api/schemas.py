@@ -137,6 +137,15 @@ class RunCreate(BaseModel):
     environment_name: str
 
 
+class RunFailureOut(BaseModel):
+    category: str
+    disposition: str
+    retryable: bool
+    summary: str
+    provider: str | None = None
+    diagnostic_reference: str
+
+
 class RunOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -150,6 +159,10 @@ class RunOut(BaseModel):
     # bare Run(...) in memory without a real session and still serialize.
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    # Only populated by GET/DELETE /v1/runs/{id} (which fetch it via a
+    # separate run_service.get_run_failure() call, not from_attributes),
+    # and only non-None when state == "FAILED".
+    failure: RunFailureOut | None = None
 
 
 class RunEventOut(BaseModel):
@@ -157,6 +170,8 @@ class RunEventOut(BaseModel):
 
     from_state: str | None
     to_state: str
+    category: str | None = None
+    disposition: str | None = None
     message: str | None
 
 

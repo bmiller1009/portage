@@ -27,12 +27,14 @@ from spec.artifact.v1alpha1 import (
     Artifact,
     ArtifactMetadata,
     ArtifactPathBinding,
+    ArtifactResolutionError,
     parse_artifact_reference,
     resolve_artifact_uri,
 )
 from spec.dataset.v1alpha1 import (
     Dataset,
     DatasetMetadata,
+    DatasetResolutionError,
     PathBinding,
     TableBinding,
     resolve_dataset_config,
@@ -167,35 +169,60 @@ async def submit_new_runs(session: AsyncSession) -> None:
     # land in. Also picks up runs stuck in SUBMITTING from a prior crash.
     for run in await repositories.claim_runs_for_submission(session):
         try:
-            workload_row = await repositories.get_workload_definition(
-                session, run.workload_name, version=run.workload_version
-            )
-            workload = SparkWorkload.model_validate(workload_row.definition)
-            workload = await _resolve_artifact(session, workload, run.environment_name)
-            environment = await repositories.get_environment(session, run.environment_name)
-            execution_profile = await repositories.get_execution_profile(
-                session, environment.execution_profile_name
-            )
-            storage_profile = await repositories.get_storage_profile(
-                session, environment.storage_profile_name
-            )
-            storage_config = provider_factory.build_storage_config(storage_profile)
+            try:
+                workload_row = await repositories.get_workload_definition(
+                    session, run.workload_name, version=run.workload_version
+                )
+                workload = SparkWorkload.model_validate(workload_row.definition)
+                workload = await _resolve_artifact(session, workload, run.environment_name)
+                environment = await repositories.get_environment(session, run.environment_name)
+                execution_profile = await repositories.get_execution_profile(
+                    session, environment.execution_profile_name
+                )
+                storage_profile = await repositories.get_storage_profile(
+                    session, environment.storage_profile_name
+                )
+                storage_config = provider_factory.build_storage_config(storage_profile)
 
-            resolved = ResolvedWorkload(
-                workload=workload,
-                dataset_config=await _resolve_dataset_config(
-                    session, workload, run.environment_name, storage_profile, storage_config
-                ),
-                storage_config=storage_config,
-                environment_name=run.environment_name,
-                volume_mounts=provider_factory.build_storage_volume_mounts(storage_profile),
-            )
+                resolved = ResolvedWorkload(
+                    workload=workload,
+                    dataset_config=await _resolve_dataset_config(
+                        session, workload, run.environment_name, storage_profile, storage_config
+                    ),
+                    storage_config=storage_config,
+                    environment_name=run.environment_name,
+                    volume_mounts=provider_factory.build_storage_volume_mounts(storage_profile),
+                )
+            except (
+                repositories.NotFoundError,
+                DatasetResolutionError,
+                ArtifactResolutionError,
+            ) as e:
+                # The run references a workload/environment/dataset/
+                # artifact binding that doesn't resolve — a configuration
+                # mistake in the workload or environment, not a provider
+                # problem, so it needs a human to fix rather than a retry.
+                metrics.provider_errors_total.add(1)
+                await run_service.transition_run_state(
+                    session,
+                    run,
+                    RunState.FAILED,
+                    message=str(e),
+                    category="STORAGE_RESOLUTION",
+                    disposition="user_action_required",
+                )
+                continue
             provider = provider_factory.build_execution_provider(execution_profile)
 
             validation = await provider.validate(resolved)
             if not validation.valid:
                 await run_service.transition_run_state(
-                    session, run, RunState.FAILED, message="; ".join(validation.errors)
+                    session,
+                    run,
+                    RunState.FAILED,
+                    message="; ".join(validation.errors),
+                    category="VALIDATION",
+                    disposition="user_action_required",
                 )
                 continue
 
@@ -210,6 +237,8 @@ async def submit_new_runs(session: AsyncSession) -> None:
                         run,
                         RunState.FAILED,
                         message=f"exceeded max submission attempts ({attempts}): {e}",
+                        category="PROVIDER_SUBMISSION",
+                        disposition="terminal",
                     )
                 else:
                     await run_service.transition_run_state(
@@ -221,7 +250,14 @@ async def submit_new_runs(session: AsyncSession) -> None:
                 continue
             except TerminalProviderError as e:
                 metrics.provider_errors_total.add(1)
-                await run_service.transition_run_state(session, run, RunState.FAILED, message=str(e))
+                await run_service.transition_run_state(
+                    session,
+                    run,
+                    RunState.FAILED,
+                    message=str(e),
+                    category="PROVIDER_SUBMISSION",
+                    disposition="terminal",
+                )
                 continue
 
             await repositories.create_provider_run(
@@ -247,7 +283,12 @@ async def submit_new_runs(session: AsyncSession) -> None:
             # it's visibly different from a provider's own classification.
             metrics.provider_errors_total.add(1)
             await run_service.transition_run_state(
-                session, run, RunState.FAILED, message=f"unclassified error: {e}"
+                session,
+                run,
+                RunState.FAILED,
+                message=f"unclassified error: {e}",
+                category="UNKNOWN_RECONCILIATION",
+                disposition="terminal",
             )
 
 
@@ -286,7 +327,14 @@ async def poll_active_runs(session: AsyncSession) -> None:
                 # on purpose, same distinction submit_new_runs already
                 # makes.
                 metrics.provider_errors_total.add(1)
-                await run_service.transition_run_state(session, run, RunState.FAILED, message=str(e))
+                await run_service.transition_run_state(
+                    session,
+                    run,
+                    RunState.FAILED,
+                    message=str(e),
+                    category="WORKLOAD_EXECUTION",
+                    disposition="terminal",
+                )
                 continue
 
             if status.state.value != run.state:
@@ -302,13 +350,28 @@ async def poll_active_runs(session: AsyncSession) -> None:
                         metrics.execution_duration_seconds.record(
                             (datetime.now(UTC) - running_at).total_seconds()
                         )
+                # Provider reported FAILED directly (not via a raised
+                # exception) -- the most common real-world failure shape:
+                # the job actually ran and genuinely failed (e.g. "Spark
+                # driver exited non-zero"), not a submission/provider
+                # problem.
                 await run_service.transition_run_state(
-                    session, run, status.state, message=status.provider_native_status
+                    session,
+                    run,
+                    status.state,
+                    message=status.provider_native_status,
+                    category="WORKLOAD_EXECUTION" if status.state == RunState.FAILED else None,
+                    disposition="terminal" if status.state == RunState.FAILED else None,
                 )
         except Exception as e:  # noqa: BLE001 - same rationale as submit_new_runs
             metrics.provider_errors_total.add(1)
             await run_service.transition_run_state(
-                session, run, RunState.FAILED, message=f"unclassified error: {e}"
+                session,
+                run,
+                RunState.FAILED,
+                message=f"unclassified error: {e}",
+                category="UNKNOWN_RECONCILIATION",
+                disposition="terminal",
             )
 
 
@@ -343,7 +406,12 @@ async def cancel_runs(session: AsyncSession) -> None:
         except Exception as e:  # noqa: BLE001 - same rationale as submit_new_runs
             metrics.provider_errors_total.add(1)
             await run_service.transition_run_state(
-                session, run, RunState.FAILED, message=f"unclassified error: {e}"
+                session,
+                run,
+                RunState.FAILED,
+                message=f"unclassified error: {e}",
+                category="UNKNOWN_RECONCILIATION",
+                disposition="terminal",
             )
 
 

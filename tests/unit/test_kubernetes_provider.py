@@ -1,5 +1,6 @@
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -241,6 +242,40 @@ def test_submit_raises_terminal_on_other_api_status(profile, resolved_run):
 
     with pytest.raises(TerminalProviderError):
         asyncio.run(provider.submit(resolved_run))
+
+
+def test_submit_error_message_omits_raw_response_headers_and_body(profile, resolved_run):
+    """kubernetes.client.exceptions.ApiException.__str__() includes the
+    raw HTTP response headers and body — content this codebase doesn't
+    control, which would otherwise flow straight into RunEvent.message
+    and be exposed via GET /v1/runs/{id}/events to any Viewer-role user
+    (v1.0.0 release-hardening logging-hygiene audit). The classified
+    exception's message must use only the structured status/reason
+    fields, never str(e) directly."""
+    from kubernetes.client.exceptions import ApiException
+
+    from control_plane.execution_provider import TerminalProviderError
+
+    fake_api = FakeCustomObjectsApi()
+    fake_api.raise_on_create = ApiException(
+        status=403,
+        reason="Forbidden",
+        http_resp=SimpleNamespace(
+            status=403,
+            reason="Forbidden",
+            data='{"message": "not authorized"}',
+            getheaders=lambda: {"Authorization": "Bearer super-secret-token-should-not-leak"},
+        ),
+    )
+    provider = KubernetesExecutionProvider(profile, api_client=fake_api)
+
+    with pytest.raises(TerminalProviderError) as exc_info:
+        asyncio.run(provider.submit(resolved_run))
+
+    message = str(exc_info.value)
+    assert "super-secret-token-should-not-leak" not in message
+    assert "403" in message
+    assert "Forbidden" in message
 
 
 def test_submit_raises_retryable_when_api_server_unreachable(profile, resolved_run):

@@ -173,6 +173,13 @@ class RunEvent(Base):
     from_state: Mapped[str | None] = mapped_column(String(32), nullable=True)
     to_state: Mapped[str] = mapped_column(String(32))
     message: Mapped[str | None] = mapped_column(String(4096), nullable=True)
+    # control_plane/failure_taxonomy.py's Category/Disposition literals,
+    # stored as plain strings — only ever set on a transition to FAILED
+    # (see run_service.transition_run_state()); every other transition
+    # leaves both NULL, including on rows created before this column
+    # existed.
+    category: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    disposition: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

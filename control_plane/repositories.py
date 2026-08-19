@@ -648,8 +648,17 @@ async def create_run_event(
     from_state: str | None,
     to_state: str,
     message: str | None = None,
+    category: str | None = None,
+    disposition: str | None = None,
 ) -> RunEvent:
-    event = RunEvent(run_id=run_id, from_state=from_state, to_state=to_state, message=message)
+    event = RunEvent(
+        run_id=run_id,
+        from_state=from_state,
+        to_state=to_state,
+        message=message,
+        category=category,
+        disposition=disposition,
+    )
     session.add(event)
     await session.commit()
     await session.refresh(event)

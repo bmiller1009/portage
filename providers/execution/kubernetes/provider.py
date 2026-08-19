@@ -147,14 +147,28 @@ _RETRYABLE_API_STATUS_CODES = {401, 429, 500, 502, 503, 504}
 _API_REQUEST_TIMEOUT_SECONDS = 30
 
 
+def _safe_api_exception_message(e: ApiException) -> str:
+    """`str(ApiException)` includes the *raw* HTTP response headers and
+    body (confirmed via kubernetes.client.exceptions.ApiException.__str__)
+    — content from the API server this code doesn't control, which flows
+    straight into RunEvent.message and is exposed via
+    GET /v1/runs/{id}/events to any Viewer-role user. Uses only the
+    structured status/reason fields instead — enough to classify and
+    debug the failure without repeating whatever the server's response
+    body happened to contain (a logging-hygiene finding from the v1.0.0
+    release-hardening pass, not a known live incident)."""
+    return f"Kubernetes API error {e.status}: {e.reason}"
+
+
 def _raise_classified(e: ApiException) -> NoReturn:
     """Shared by status()/cancel() as well as submit() (spec §56's "network
     interruption after submission" scenario — a transient API blip while
     polling or canceling deserves the same retry treatment as one during
     submission, not an immediate FAILED for a run that's actually fine)."""
+    message = _safe_api_exception_message(e)
     if e.status in _RETRYABLE_API_STATUS_CODES:
-        raise RetryableProviderError(str(e)) from e
-    raise TerminalProviderError(str(e)) from e
+        raise RetryableProviderError(message) from e
+    raise TerminalProviderError(message) from e
 
 
 def _raise_unreachable(e: MaxRetryError) -> NoReturn:

@@ -5,11 +5,14 @@ GET /v1/runs/{id}/events).
 """
 
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from control_plane import metrics, provider_factory, repositories, webhooks
 from control_plane.execution_provider import LogReference, ResolvedWorkload, ValidationResult
+from control_plane.failure_taxonomy import Category as FailureCategory
+from control_plane.failure_taxonomy import Disposition as FailureDisposition
 from control_plane.models import Run
 from control_plane.run_state import TERMINAL_STATES, RunState
 from spec.workload.v1alpha1 import SparkWorkload
@@ -78,6 +81,55 @@ async def create_run(
     return run, True
 
 
+@dataclass
+class RunFailure:
+    """Normalized failure diagnostics for a FAILED run (v1.0.0
+    release-hardening) — never raw provider payloads or credentials,
+    since `summary` is always a message this codebase's own exception
+    classes/`ProviderStatus.provider_native_status` produced, not
+    anything read straight off a provider response body."""
+
+    category: FailureCategory
+    disposition: FailureDisposition
+    retryable: bool
+    summary: str
+    provider: str | None
+    diagnostic_reference: str
+
+
+async def get_run_failure(session: AsyncSession, run: Run) -> RunFailure | None:
+    """None unless the run is actually FAILED — a run that's still active
+    or that succeeded/was canceled has no failure to report."""
+    if run.state != RunState.FAILED.value:
+        return None
+    events = await repositories.list_run_events(session, run.id)
+    failure_event = next(
+        (e for e in reversed(events) if e.to_state == RunState.FAILED.value), None
+    )
+    if failure_event is None:
+        # Pre-dates this feature, or was transitioned some other way —
+        # report what we can rather than nothing.
+        return RunFailure(
+            category="UNKNOWN_RECONCILIATION",
+            disposition="terminal",
+            retryable=False,
+            summary="",
+            provider=None,
+            diagnostic_reference=f"/v1/runs/{run.id}/events",
+        )
+    provider_run = await repositories.get_latest_provider_run(session, run.id)
+    category = failure_event.category or "UNKNOWN_RECONCILIATION"
+    disposition = failure_event.disposition or "terminal"
+    return RunFailure(
+        category=category,  # type: ignore[arg-type]
+        disposition=disposition,  # type: ignore[arg-type]
+        retryable=disposition == "retryable",
+        summary=failure_event.message or "",
+        provider=provider_run.provider if provider_run else None,
+        diagnostic_reference=f"/v1/runs/{run.id}/events",
+    )
+
+
 async def get_run(session: AsyncSession, run_id: uuid.UUID) -> Run:
     return await repositories.get_run(session, run_id)
 
@@ -91,12 +143,24 @@ async def list_run_events(session: AsyncSession, run_id: uuid.UUID):
 
 
 async def transition_run_state(
-    session: AsyncSession, run: Run, new_state: RunState, *, message: str | None = None
+    session: AsyncSession,
+    run: Run,
+    new_state: RunState,
+    *,
+    message: str | None = None,
+    category: FailureCategory | None = None,
+    disposition: FailureDisposition | None = None,
 ) -> Run:
     old_state = run.state
     await repositories.update_run_state(session, run, new_state.value)
     await repositories.create_run_event(
-        session, run_id=run.id, from_state=old_state, to_state=new_state.value, message=message
+        session,
+        run_id=run.id,
+        from_state=old_state,
+        to_state=new_state.value,
+        message=message,
+        category=category,
+        disposition=disposition,
     )
     await webhooks.record_webhook_deliveries(
         session, run, from_state=old_state, to_state=new_state.value, message=message

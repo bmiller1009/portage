@@ -786,6 +786,28 @@
       },
       "RunEventOut": {
         "properties": {
+          "category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Category"
+          },
+          "disposition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Disposition"
+          },
           "from_state": {
             "anyOf": [
               {
@@ -819,6 +841,50 @@
           "message"
         ],
         "title": "RunEventOut",
+        "type": "object"
+      },
+      "RunFailureOut": {
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "diagnostic_reference": {
+            "title": "Diagnostic Reference",
+            "type": "string"
+          },
+          "disposition": {
+            "title": "Disposition",
+            "type": "string"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "retryable": {
+            "title": "Retryable",
+            "type": "boolean"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "disposition",
+          "retryable",
+          "summary",
+          "diagnostic_reference"
+        ],
+        "title": "RunFailureOut",
         "type": "object"
       },
       "RunLogsOut": {
@@ -863,6 +929,16 @@
           "environment_name": {
             "title": "Environment Name",
             "type": "string"
+          },
+          "failure": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunFailureOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "id": {
             "format": "uuid",

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.auth import ROLE_DEVELOPER, ROLE_OPERATOR, ROLE_VIEWER, Identity, require_role
-from api.schemas import RunCreate, RunEventOut, RunLogsOut, RunOut
+from api.schemas import RunCreate, RunEventOut, RunFailureOut, RunLogsOut, RunOut
 from control_plane import audit, repositories, run_service
 from control_plane.db import get_db_session
 
@@ -80,9 +80,12 @@ async def get_run(
     identity: Identity = Depends(require_role(ROLE_VIEWER)),
 ):
     try:
-        return await run_service.get_run(session, run_id)
+        run = await run_service.get_run(session, run_id)
     except repositories.NotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
+    failure = await run_service.get_run_failure(session, run)
+    failure_out = RunFailureOut.model_validate(failure, from_attributes=True) if failure else None
+    return RunOut.model_validate(run, from_attributes=True).model_copy(update={"failure": failure_out})
 
 
 @router.get("/{run_id}/events", response_model=list[RunEventOut])

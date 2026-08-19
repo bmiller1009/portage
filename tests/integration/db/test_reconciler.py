@@ -205,6 +205,16 @@ async def test_reconcile_once_transitions_to_failed_on_validation_rejection(
 
     run = await run_service.get_run(session, run.id)
     assert run.state == RunState.FAILED.value
+    events = await run_service.list_run_events(session, run.id)
+    failed_event = next(e for e in events if e.to_state == RunState.FAILED.value)
+    assert failed_event.category == "VALIDATION"
+    assert failed_event.disposition == "user_action_required"
+
+    failure = await run_service.get_run_failure(session, run)
+    assert failure is not None
+    assert failure.category == "VALIDATION"
+    assert failure.retryable is False
+    assert "unsupported artifact type" in failure.summary
 
 
 @pytest.mark.asyncio
@@ -294,6 +304,11 @@ async def test_reconcile_once_transitions_to_failed_on_missing_dataset_binding(
     # FakeExecutionProvider's docstring above. The one guarantee this
     # test actually cares about is that ITS OWN error was counted at all.
     assert _counter_value("portage_provider_errors_total") >= errors_before + 1
+
+    events = await run_service.list_run_events(session, run.id)
+    failed_event = next(e for e in events if e.to_state == RunState.FAILED.value)
+    assert failed_event.category == "STORAGE_RESOLUTION"
+    assert failed_event.disposition == "user_action_required"
 
 
 @pytest.mark.asyncio
@@ -576,6 +591,8 @@ async def test_poll_fails_run_with_classified_message_on_terminal_provider_error
     events = await repositories.list_run_events(session, run.id)
     failure_event = next(e for e in events if e.to_state == RunState.FAILED.value)
     assert failure_event.message == "401 Unauthorized"
+    assert failure_event.category == "WORKLOAD_EXECUTION"
+    assert failure_event.disposition == "terminal"
 
 
 @pytest.mark.asyncio
