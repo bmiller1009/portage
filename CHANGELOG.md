@@ -27,10 +27,13 @@ infrastructure, not simulated.
 - **Kubernetes**: production-tested across every milestone — real
   `SparkApplication` submission via the Apache Spark Kubernetes Operator,
   JVM JAR and Python wheel artifacts, cancellation, capability matching.
-- **Databricks**: real OAuth M2M-authenticated live runs (classic and
-  Serverless), JVM JAR and Python wheel artifacts, capability matching
-  against a curated Databricks Runtime ↔ Spark version compatibility
-  matrix.
+- **Databricks**: real OAuth M2M-authenticated live runs against the
+  Serverless compute path; JVM JAR and Python wheel artifacts, capability
+  matching against a curated Databricks Runtime ↔ Spark version
+  compatibility matrix. The classic-cluster submission path is
+  implemented and contract-tested, but was never live-run against a real
+  workspace — this project's own verification workspace administratively
+  forbids classic job clusters ("Only serverless compute is supported").
 
 ### Storage
 
